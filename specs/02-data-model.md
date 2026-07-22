@@ -144,3 +144,22 @@ inventory_movements GROUP BY variant_id`. A plain view recomputes on every
   error. `getStockForVariants` special-cases `ids.length === 0` and returns
   an empty `Map` without querying. Any future batch-lookup function built on
   `inArray` (e.g. an orders or variants batch fetch) needs the same guard.
+
+## Implementation notes (1.3d — orders repo)
+
+- `src/lib/repos/orders.ts`'s `createOrder(order, items)` wraps the order
+  insert and the `order_items` insert in one `db.transaction`, matching the
+  "atomic, no partial rows" requirement 3.5 will also depend on. Drizzle's
+  transaction callback rolls back automatically on any thrown error inside
+  it — including a Postgres constraint violation from the driver — so no
+  explicit `tx.rollback()` call is needed for this case.
+- `order_items.variant_id` is nullable (a variant may be deleted later; see
+  the snapshot-column rationale above), so Postgres only enforces the FK
+  when a value is actually supplied. A test proving transactional rollback
+  must therefore pass a non-null-but-nonexistent variant id — passing `null`
+  inserts successfully and proves nothing.
+- No order-items reader (e.g. `getOrderItemsByOrderId`) exists yet. The
+  fix_plan's 1.3d bullet only calls for order-level functions
+  (create/getById/getByStripeSessionId/listByStatus/update). 3.5 (order
+  creation + inventory decrement) and 4.6 (orders dashboard) will need one —
+  add it there against their actual read shape, rather than guessing one now.

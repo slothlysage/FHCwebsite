@@ -278,7 +278,7 @@ variant_id` — a plain, not materialized, view so it's always fresh with
       GitHub Actions' `services:` block, not docker-compose. No change needed
       there; `docker-compose.yml` is local-dev-only per `specs/08-deploy-ops.md`.
 
-- [ ] **1.3 Repository layer**
+- [x] **1.3 Repository layer**
       Deps: 1.1. `src/lib/repos/*` — the only modules that import Drizzle.
       Typed CRUD for products, variants, orders, inventory.
       AC: every repo function has an integration test against the dev database.
@@ -364,13 +364,40 @@ variant_id` — a plain, not materialized, view so it's always fresh with
         rejects as invalid syntax. Any future batch-lookup repo function
         built on `inArray` needs the same empty-input guard.
 
-  - [ ] **1.3d Orders repo**
-        Deps: 1.3b. `src/lib/repos/orders.ts` — create (order + order_items in
-        one transaction), getById, getByStripeSessionId, listByStatus, update
-        (status transitions, `paidAt`/`fulfilledAt`).
-        AC: integration tests per function; creating an order with items is
-        atomic (a failure partway through leaves no partial rows — this is
-        also required later by 3.5, so get the transaction shape right now).
+  - [x] **1.3d Orders repo**
+        Deps: 1.3b. `src/lib/repos/orders.ts` — createOrder(order, items)
+        (order + order_items in one `db.transaction`), getOrderById,
+        getOrderByStripeSessionId, listOrdersByStatus, updateOrder (patch —
+        status transitions, `paidAt`/`fulfilledAt` are just fields on the
+        patch, no separate transition function).
+        `src/lib/repos/orders.test.ts` — 8 integration tests against the real
+        dev database: create-with-items (asserts the returned order and that
+        `order_items` rows exist with the right `orderId`), the atomicity
+        test (an item with a `variantId` that doesn't exist in
+        `product_variants` violates the FK inside the transaction — asserts
+        `createOrder(...)` rejects, then that neither the order — looked up
+        by its unique `stripeSessionId` — nor the item — looked up by a
+        unique `skuSnapshot` marker, since the failed insert never returns an
+        id to key off — persisted), getById found/not-found,
+        getByStripeSessionId found/not-found, listByStatus (filters paid vs.
+        pending), update (status + both timestamp fields in two successive
+        patches). Confirmed red first by moving `orders.ts` aside — the test
+        failed on import resolution, not a runtime error — then restored it.
+        AC met: 100% statement/branch/function/line coverage on the repo
+        module; full `npm run verify` green (11 files, 62 tests, 100% global
+        coverage, build passes).
+        NOTE: `orderItems.variantId` is nullable (a variant may be deleted
+        later — see the spec's snapshot-column rationale), so Postgres only
+        enforces the FK when a value is actually provided. The atomicity test
+        exploits exactly this: it must pass a non-null-but-nonexistent uuid
+        to get a real FK violation, since passing `null` would insert
+        successfully and prove nothing about rollback.
+        NOTE: no `getOrderItemsByOrderId` (or any order-items reader) exists
+        yet — out of scope per the fix_plan bullet, which lists only the five
+        order-level functions above. 3.5 (order creation + inventory
+        decrement) or 4.6 (orders dashboard) will need one; add it there, not
+        here, as a repo-import fix if items are needed before then instead of
+        guessing at a shape now.
 
 - [ ] **1.4 Seed + CSV catalog importer**
       Deps: 1.3. Importer reads the Shopify product CSV export into the schema —
