@@ -78,6 +78,32 @@ why:
   which is CJS). Revisit this pin periodically — it's a workaround, not a
   permanent constraint.
 
+## Scaffolding notes (0.4)
+
+`src/lib/env.ts` validates `process.env` with two separate zod schemas rather
+than one:
+
+- `serverSchema` — DB, Stripe secret key, `ALLOW_LIVE`, admin bootstrap, R2,
+  Resend, Sentry. Vars for features not built yet are `.optional()`; promote
+  each to required only in the iteration that actually wires up that feature,
+  so an unused var never fails `npm run build` for no reason.
+- `clientSchema` — the `NEXT_PUBLIC_*` vars, always required.
+
+`clientEnv` is built from **literal** `process.env.NEXT_PUBLIC_X` reads, one
+per key, not a spread of the whole `process.env` object. Next's
+build only inlines a specific literal `process.env.SOME_VAR` member
+expression into the client bundle — a dynamic/generic `process.env` lookup
+is `undefined` in the browser regardless of what's set on the server. This
+is the same constraint that shapes libraries like `t3-env`.
+
+There's no explicit "validate at boot" call — the root layout imports `env`
+and uses `NEXT_PUBLIC_SITE_URL` for `metadata.metadataBase`, and because the
+root layout is on every route, that import runs during `next build`'s page
+data collection, which is what makes a missing var fail the build. If a
+future page stops needing `env` at that layer, the validation needs a new
+forced import site (or an explicit call in `instrumentation.ts`) or it'll
+silently stop running at build time.
+
 ## Alternative if the agent struggles with the Cloudflare adapter
 
 `@opennextjs/cloudflare` is less mature than Vercel's first-party path and some

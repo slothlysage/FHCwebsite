@@ -64,13 +64,39 @@ is demonstrably true and `npm run verify` is green.
       exact from the plan. `format:check` exists as a standalone script if a
       future CI step wants a formatting gate; it isn't wired in by this task.
 
-- [ ] **0.4 Typed environment config**
+- [x] **0.4 Typed environment config**
       Deps: 0.1.
-      `src/lib/env.ts` — zod schema, parsed once at boot, throws loudly on missing
-      vars. Separate server-only vars from `NEXT_PUBLIC_*`. Write `.env.example`
-      with names and comments, no values.
-      AC: removing a required var from `.env.local` fails `npm run build` with a
-      readable message naming the variable. Unit test covers a missing-var case.
+      `src/lib/env.ts` — two zod schemas: `serverSchema` (DB, Stripe secret,
+      ALLOW_LIVE, admin bootstrap, R2, Resend, Sentry — only DATABASE_URL,
+      STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET required, rest `.optional()`
+      since nothing consumes them yet) and `clientSchema` (`NEXT_PUBLIC_*`,
+      both required). Parsed once at module load via a `parseOrThrow` helper
+      that throws one `Error` listing every invalid/missing field path — e.g.
+      `- DATABASE_URL: Invalid input: expected string, received undefined`.
+      Exports `env` (server-only, full set) and `clientEnv` (public subset).
+      `clientEnv` reads each var through a literal `process.env.NEXT_PUBLIC_X`
+      expression, not a `process.env` spread — Next's compiler only inlines
+      literal member-expression reads into the client bundle, so a dynamic
+      lookup would silently be `undefined` in the browser.
+      Root layout (`src/app/layout.tsx`) imports `env` and uses
+      `NEXT_PUBLIC_SITE_URL` for `metadata.metadataBase`, which forces the
+      parse to run during `next build`'s page-data collection — this is what
+      makes the AC's build failure happen, not an explicit boot script.
+      `.env.example` already had the right names/comments from 0.1; unchanged.
+      Added `.env.local` (gitignored, dummy `sk_test_`/`whsec_` style values
+      matching `.github/workflows/ci.yml`'s dummy env block) so local
+      `npm run dev`/`build` work without real credentials.
+      AC met: emptied `.env.local` of `DATABASE_URL`/`STRIPE_SECRET_KEY`/
+      `STRIPE_WEBHOOK_SECRET`, ran `npm run build`, confirmed it fails with
+      `Invalid environment variables:` naming all three; restored the file,
+      confirmed build passes again. `src/lib/env.test.ts` (5 cases: full
+      success, missing required server var throws naming it, missing required
+      public var throws naming it, `ALLOW_LIVE` string→boolean coercion,
+      `clientEnv` excludes server secrets) — 100% coverage on `env.ts`.
+      NOTE for later phases: when Stripe/R2/Resend/Sentry modules are actually
+      built (3.1, 4.5, 3.7, 5.3), promote their now-`.optional()` vars to
+      required in `serverSchema` at that point, not before — an unused
+      required var would fail `npm run build` for no functional reason.
 
 - [ ] **0.5 CI pipeline**
       Deps: 0.3.
