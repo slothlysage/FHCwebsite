@@ -183,3 +183,83 @@ inventory_movements GROUP BY variant_id`. A plain view recomputes on every
   against `products`/`product_variants` and creating `categories` rows for
   any `ParsedProduct.categories` string that doesn't already have a matching
   `categories.slug`.
+
+## Implementation notes (1.4b — diff + apply + seed CLI)
+
+- `ParsedVariant` gained a `stockQuantity` field (parsed from the optional
+  `Variant Inventory Qty` column, defaulting to `0` when absent or
+  non-numeric — an unknown starting count is not a row-level parse error the
+  way a missing price/weight is). 1.4a shipped without this field because
+  nothing downstream needed it yet; 1.4b's "one `import`-reason
+  `inventory_movements` row per variant" requirement is what needed it.
+- `src/lib/services/catalog-import.ts` (new file, separate from
+  `catalog-importer.ts`) does the DB-touching diff/apply. It reads the
+  existing product by slug and each variant by SKU via the repos, decides
+  `create`/`update`/`unchanged` per product and per variant, and — only in
+  apply mode — writes. Category links and the full image set are
+  re-applied on every apply run regardless of the product/variant diff
+  action, which is what makes tag/image edits in a re-exported CSV take
+  effect without a special-cased diff branch for them.
+- **Transactionality vs. the "only repos import `db`" rule (AGENT.md):** a
+  cross-table write (product + variants + category links + images +
+  inventory movements) needs one shared transaction, but `db.transaction`
+  itself must stay behind the repo boundary. Solved by adding a `DbExecutor`
+  type export to `src/lib/db/client.ts` (`typeof db` or a `db.transaction`
+  callback's `tx`) and an optional `executor: DbExecutor = db` parameter on
+  every repo function `catalog-import.ts` calls
+  (`products.createProduct`/`getProductBySlug`/`updateProduct`,
+  `variants.createVariant`/`getVariantBySku`/`updateVariant`,
+  `inventory.recordMovement`, and the new `categories.ts`/`images.ts`
+  functions below). A new `src/lib/repos/transaction.ts` exports
+  `withTransaction(fn)`, the only place outside `db/client.ts` that calls
+  `db.transaction` directly — the service imports `withTransaction`, not
+  `db`, so the dependency direction (`app → services → repos → db`) still
+  holds. Dry-run mode calls the same code path with `executor` left
+  `undefined`, which makes every repo call fall through to its own `= db`
+  default — the service itself never imports `db`.
+- Two new repo modules, mirroring the existing single-table-CRUD shape:
+  - `src/lib/repos/categories.ts` — `getCategoryBySlug`, `createCategory`,
+    `linkProductCategory` (inserts into `product_categories` with
+    `.onConflictDoNothing()` — the composite PK makes re-linking an already-
+    linked product/category pair a no-op instead of a unique-violation,
+    which is what makes re-running an import idempotent for categories).
+  - `src/lib/repos/images.ts` — `replaceProductImages(productId, images)`:
+    deletes every existing row for the product, then bulk-inserts the new
+    set. `product_images` has no natural unique key to upsert on (a
+    reimported URL isn't guaranteed stable across runs), so delete-then-
+    reinsert is what keeps the table from accumulating duplicates on
+    repeated `--apply` runs.
+- **Image `width`/`height` are written as `0`, not real dimensions.**
+  `product_images.width`/`height` are `NOT NULL`, but Shopify's CSV export
+  carries only `Image Src`/`Image Position`/`Image Alt Text` — no
+  dimensions, since those require fetching and decoding the actual image
+  bytes. That is 4.5's job (R2 presigned upload + magic-byte validation +
+  EXIF stripping + responsive sizes), which will necessarily re-process
+  every image anyway. `0`/`0` is a deliberate placeholder for 4.5 to
+  overwrite, not a guess at real values.
+- New variants created during apply always get exactly one `import`-reason
+  `inventory_movements` row (delta = the parsed `stockQuantity`, even when
+  it's `0`, for an unbroken audit trail). Variants that already existed
+  (matched by SKU) never get a second movement on re-apply — the
+  idempotency guarantee holds for stock, not just for the product/variant
+  rows themselves.
+- `scripts/import-catalog.mts` (not `.mjs`) — this CLI genuinely needs the
+  tested TypeScript parser/diff/apply logic (unlike `db-migrate.mjs`, whose
+  own logic is ten lines of raw `pg`/drizzle glue with nothing to reuse), so
+  reimplementing it in plain JS was rejected as the exact duplicate-
+  implementation trap the loop's own instructions warn about. Run via `tsx`
+  (added as an explicit `devDependency`, previously present only
+  transitively via `vite`/`drizzle-kit`). `.mts`, not `.ts`, because the
+  script ends in a top-level `await main()` and the package has no
+  `"type": "module"` — same reasoning as `vitest.config.mts` (0.2's NOTE).
+  Usage: `npm run import-catalog -- <file.csv> [--apply]`.
+- AC verified with a synthetic CSV against the local dev database (no real
+  Shopify export exists yet — see "Blocked — needs human" in fix_plan.md):
+  dry-run against an empty catalog reports every product/variant as
+  `create` and writes nothing; `--apply` then creates the product, variant,
+  category links, image, and exactly one `import` movement; running
+  `--apply` again on the identical file reports everything `unchanged` and
+  writes no new rows (confirmed no duplicate movement, image, or category
+  link); changing a field and re-running reports/applies `update`; adding a
+  new variant SKU to an already-imported product creates only that variant
+  without touching the existing one's diff action or stock.

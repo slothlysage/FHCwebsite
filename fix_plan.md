@@ -399,7 +399,7 @@ variant_id` — a plain, not materialized, view so it's always fresh with
         here, as a repo-import fix if items are needed before then instead of
         guessing at a shape now.
 
-- [ ] **1.4 Seed + CSV catalog importer**
+- [x] **1.4 Seed + CSV catalog importer**
       Deps: 1.3. Importer reads the Shopify product CSV export into the schema —
       handles variants, images, tags→categories, and per-variant SKU/price.
       Dry-run mode prints a diff and changes nothing.
@@ -430,7 +430,7 @@ variant_id` — a plain, not materialized, view so it's always fresh with
         invalidates every row, so partial output would be misleading.
         Row-level problems (blank `Handle`, blank `Title` on a new handle,
         duplicate SKU anywhere in the file, non-numeric `Variant
-    Price`/`Variant Compare At Price`/`Variant Grams`) are collected into
+Price`/`Variant Compare At Price`/`Variant Grams`) are collected into
         an `errors: ImportRowError[]` array with a 1-based data-row number
         and the offending handle; the row/variant is skipped, not thrown,
         and parsing continues — this is what "malformed rows are reported,
@@ -461,7 +461,7 @@ variant_id` — a plain, not materialized, view so it's always fresh with
         `noUncheckedIndexedAccess` typing bare indexed access as possibly
         `undefined`. The `?.trim() ?? ""` / `|| null` pattern is kept only for
         genuinely optional columns (`Tags`, `Body (HTML)`, `Option1/2/3
-    Value`, `Variant Compare At Price`, `Image Src`, `Image Position`,
+Value`, `Variant Compare At Price`, `Image Src`, `Image Position`,
         `Image Alt Text`) that a minimal export may omit entirely.
         NOTE for 1.4b: `parseShopifyCsv` does not enforce "every product has
         at least one variant" (a spec-level expectation, not a DB
@@ -474,23 +474,60 @@ variant_id` — a plain, not materialized, view so it's always fresh with
         was needed. If a future non-Shopify source feeds this parser, that
         assumption would need revisiting.
 
-  - [ ] **1.4b Dry-run diff + apply + seed CLI**
-        Deps: 1.4a. Takes parsed products from 1.4a and diffs them against the
-        current catalog (via the products/variants repos from 1.3a/b) to
-        report creates/updates/unchanged. Dry-run mode (default) only prints
-        the diff. A CLI script (`scripts/import-catalog.mjs`, `--dry-run` by
-        default, explicit `--apply` flag required to write) applies the
-        import transactionally, writing products, variants, images, and
-        tag→category links, and records an `import` reason
-        `inventory_movements` row per variant per `specs/02-data-model.md`'s
-        `reason` enum.
-        AC: importing the real export produces the correct product/variant
-        counts; running the same file twice in `--apply` mode does not
-        duplicate rows (idempotent on `slug`/`sku`).
-        🚦 HUMAN GATE — confirm the parsed catalog before the first
-        `--apply` run against a non-empty database; this repo has no real
-        Shopify export file yet, so that gate cannot be cleared until the
-        owner supplies one.
+  - [x] **1.4b Dry-run diff + apply + seed CLI**
+        Deps: 1.4a. `src/lib/services/catalog-import.ts` — `runCatalogImport
+    (parsedProducts, {apply})` diffs parsed products against the
+        current catalog (product by slug, each variant by SKU, via the
+        products/variants repos) into per-product/per-variant
+        `create`/`update`/`unchanged` actions; dry-run (`apply: false`)
+        only reads and reports, `apply: true` writes everything inside one
+        transaction. `scripts/import-catalog.mts` — CLI wrapper (`npm run
+    import-catalog -- <file.csv> [--apply]`, dry-run is the default,
+        prints row errors then the diff/apply summary).
+        `ParsedVariant` (1.4a) gained a `stockQuantity` field — parsed from
+        the optional `Variant Inventory Qty` column, defaulting to `0` — so
+        `applyCatalogImport` has something to write into the mandatory
+        `import`-reason `inventory_movements` row for every newly created
+        variant (not re-written on re-apply, so stock doesn't double-count).
+        Two new repos, `src/lib/repos/categories.ts` (`getCategoryBySlug`,
+        `createCategory`, `linkProductCategory` — `onConflictDoNothing` on
+        the composite PK for idempotent re-linking) and
+        `src/lib/repos/images.ts` (`replaceProductImages` — delete-then-
+        reinsert per product, since `product_images` has no natural upsert
+        key). Product images are written with `width`/`height` hardcoded to
+        `0` — the CSV carries no real dimensions; that's 4.5's job when it
+        actually fetches/processes the image bytes. See
+        `specs/02-data-model.md`'s "Implementation notes (1.4b)" for full
+        detail, including how the transaction crosses `products.ts`/
+        `variants.ts`/`inventory.ts`/`categories.ts`/`images.ts` while
+        keeping "only repos import `db`" (AGENT.md) intact via a new
+        `DbExecutor` type + optional `executor` param threaded through each
+        repo function, and a `src/lib/repos/transaction.ts` helper
+        (`withTransaction`) so the service never imports `db` itself.
+        `tsx` added as an explicit `devDependency` (previously only
+        transitive, via `vite`/`drizzle-kit`) to run the `.mts` CLI, since
+        reimplementing the parser/diff logic in plain JS would have
+        duplicated already-tested code — the one thing this loop's own
+        instructions call out as the most common failure mode.
+        AC met (partially — see gate below): `src/lib/services/catalog-
+    import.test.ts` (5 integration tests against the real dev
+        database) proves create/update/unchanged actions, that dry-run
+        writes nothing, and — the AC's actual idempotency requirement —
+        that applying the same parsed input twice produces no duplicate
+        product/variant/category-link/image/inventory-movement rows the
+        second time. Also hand-verified end-to-end with the CLI against a
+        synthetic CSV (dry-run → apply → re-apply), see
+        `specs/02-data-model.md`. `npm run verify` green: 90 tests,
+        `catalog-import.ts` at 97.5%/94.87%/100%/97.36%
+        (stmts/branches/funcs/lines), comfortably above the 90%
+        `src/lib/services/**` floor.
+        🚦 HUMAN GATE — remains open. The AC's other clause ("importing
+        the real export produces the correct product/variant counts")
+        needs an actual Shopify CSV export, which this repo does not have.
+        The importer and CLI are built, tested, and ready; running them
+        for real against the production catalog still needs the owner to
+        supply the file and confirm the parsed/diffed output before the
+        first real `--apply`. See "Blocked — needs human".
 
 ---
 
@@ -742,6 +779,11 @@ _(agent appends here; do not guess around a blocker)_
 - Confirmation on cosmetics labeling: MoCRA requires an ingredient list and a
   responsible-person contact for body butter; candles need ASTM F2417 fire-safety
   warnings. Product data model assumes these fields exist. Needed for 1.1.
+- Real Shopify product CSV export: needed to actually run
+  `npm run import-catalog -- <file> --apply` for the first time (1.4b). The
+  parser, diff, apply, and CLI are all built and tested against synthetic
+  data — this is purely waiting on the owner to supply the file and confirm
+  the parsed/diffed product and variant counts before the first real apply.
 
 ## Done
 

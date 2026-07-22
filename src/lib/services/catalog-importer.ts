@@ -13,6 +13,10 @@ export interface ParsedVariant {
   compareAtPriceCents: number | null;
   weightGrams: number;
   position: number;
+  /** Initial stock for the "import" inventory movement 1.4b writes. Defaults
+   * to 0 when the column is absent or non-numeric — an unknown starting
+   * count is not a row-level error the way a missing price/weight is. */
+  stockQuantity: number;
 }
 
 export interface ParsedImage {
@@ -152,6 +156,11 @@ export function parseShopifyCsv(csvText: string): ParseCsvResult {
         const compareAtPriceCents = compareAtRaw
           ? parseMoney(compareAtRaw)
           : null;
+        const inventoryQtyRaw = raw["Variant Inventory Qty"]?.trim() ?? "";
+        const stockQuantity =
+          inventoryQtyRaw && Number.isFinite(Number(inventoryQtyRaw))
+            ? Math.round(Number(inventoryQtyRaw))
+            : 0;
 
         if (priceCents === null) {
           errors.push({
@@ -184,6 +193,7 @@ export function parseShopifyCsv(csvText: string): ParseCsvResult {
             compareAtPriceCents,
             weightGrams,
             position: product.variants.length,
+            stockQuantity,
           });
         }
       }

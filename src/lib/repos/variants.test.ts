@@ -8,6 +8,7 @@ import {
   createVariant,
   deactivateVariant,
   getVariantById,
+  getVariantBySku,
   listActiveVariantsByProductId,
   listVariantsByProductId,
   updateVariant,
@@ -66,6 +67,25 @@ describe("variants repo", () => {
 
   it("returns undefined for a nonexistent id", async () => {
     const found = await getVariantById("00000000-0000-0000-0000-000000000000");
+    expect(found).toBeUndefined();
+  });
+
+  it("gets a variant by sku", async () => {
+    const product = await makeProduct("test-variant-get-by-sku");
+    const created = await createVariant({
+      productId: product.id,
+      sku: "TEST-GET-BY-SKU",
+      name: "Get By Sku",
+      priceCents: 1000,
+      weightGrams: 100,
+    });
+
+    const found = await getVariantBySku("TEST-GET-BY-SKU");
+    expect(found?.id).toBe(created.id);
+  });
+
+  it("returns undefined for a nonexistent sku", async () => {
+    const found = await getVariantBySku("NO-SUCH-SKU");
     expect(found).toBeUndefined();
   });
 

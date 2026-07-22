@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parseShopifyCsv } from "@/lib/services/catalog-importer";
 
 const HEADER =
-  "Handle,Title,Body (HTML),Tags,Option1 Value,Option2 Value,Variant SKU,Variant Price,Variant Compare At Price,Variant Grams,Image Src,Image Position,Image Alt Text";
+  "Handle,Title,Body (HTML),Tags,Option1 Value,Option2 Value,Variant SKU,Variant Price,Variant Compare At Price,Variant Grams,Variant Inventory Qty,Image Src,Image Position,Image Alt Text";
 
 function row(fields: Record<string, string>): string {
   const cols = HEADER.split(",");
@@ -29,6 +29,7 @@ describe("parseShopifyCsv", () => {
         "Variant Price": "24.00",
         "Variant Compare At Price": "28.00",
         "Variant Grams": "227",
+        "Variant Inventory Qty": "12",
         "Image Src": "https://example.com/lav1.jpg",
         "Image Position": "1",
         "Image Alt Text": "Lavender candle, 8oz jar",
@@ -65,6 +66,7 @@ describe("parseShopifyCsv", () => {
       compareAtPriceCents: 2800,
       weightGrams: 227,
       position: 0,
+      stockQuantity: 12,
     });
     expect(product.variants[1]).toMatchObject({
       sku: "LAV-16OZ",
@@ -73,6 +75,7 @@ describe("parseShopifyCsv", () => {
       compareAtPriceCents: null,
       weightGrams: 454,
       position: 1,
+      stockQuantity: 0,
     });
     expect(product.images).toHaveLength(2);
     expect(product.images[1]).toMatchObject({
@@ -310,6 +313,28 @@ describe("parseShopifyCsv", () => {
     expect(result.products[0]!.images).toEqual([
       { url: "https://example.com/lav1.jpg", altText: "", position: 1 },
     ]);
+  });
+
+  it("defaults stockQuantity to 0 when Variant Inventory Qty is absent or non-numeric", () => {
+    const csv = [
+      HEADER,
+      row({
+        Handle: "lavender-candle",
+        Title: "Lavender Candle",
+        "Variant SKU": "LAV-8OZ",
+        "Variant Price": "24.00",
+        "Variant Grams": "227",
+        "Variant Inventory Qty": "not-a-number",
+      }),
+    ].join("\n");
+
+    const result = parseShopifyCsv(csv);
+
+    expect(result.errors).toEqual([]);
+    expect(result.products[0]!.variants[0]).toMatchObject({
+      sku: "LAV-8OZ",
+      stockQuantity: 0,
+    });
   });
 
   it("returns an empty result for an empty catalog", () => {

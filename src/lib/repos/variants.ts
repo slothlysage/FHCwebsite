@@ -1,13 +1,19 @@
 import { and, eq } from "drizzle-orm";
 
-import { db } from "@/lib/db/client";
+import { db, type DbExecutor } from "@/lib/db/client";
 import { productVariants } from "@/lib/db/schema";
 
 type Variant = typeof productVariants.$inferSelect;
 type NewVariant = typeof productVariants.$inferInsert;
 
-export async function createVariant(input: NewVariant): Promise<Variant> {
-  const [variant] = await db.insert(productVariants).values(input).returning();
+export async function createVariant(
+  input: NewVariant,
+  executor: DbExecutor = db,
+): Promise<Variant> {
+  const [variant] = await executor
+    .insert(productVariants)
+    .values(input)
+    .returning();
   return variant!;
 }
 
@@ -16,6 +22,17 @@ export async function getVariantById(id: string): Promise<Variant | undefined> {
     .select()
     .from(productVariants)
     .where(eq(productVariants.id, id));
+  return variant;
+}
+
+export async function getVariantBySku(
+  sku: string,
+  executor: DbExecutor = db,
+): Promise<Variant | undefined> {
+  const [variant] = await executor
+    .select()
+    .from(productVariants)
+    .where(eq(productVariants.sku, sku));
   return variant;
 }
 
@@ -45,8 +62,9 @@ export async function listActiveVariantsByProductId(
 export async function updateVariant(
   id: string,
   patch: Partial<NewVariant>,
+  executor: DbExecutor = db,
 ): Promise<Variant | undefined> {
-  const [updated] = await db
+  const [updated] = await executor
     .update(productVariants)
     .set(patch)
     .where(eq(productVariants.id, id))

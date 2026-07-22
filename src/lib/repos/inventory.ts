@@ -1,13 +1,16 @@
 import { eq, inArray } from "drizzle-orm";
 
-import { db } from "@/lib/db/client";
+import { db, type DbExecutor } from "@/lib/db/client";
 import { inventoryMovements, variantStock } from "@/lib/db/schema";
 
 type Movement = typeof inventoryMovements.$inferSelect;
 type NewMovement = typeof inventoryMovements.$inferInsert;
 
-export async function recordMovement(input: NewMovement): Promise<Movement> {
-  const [movement] = await db
+export async function recordMovement(
+  input: NewMovement,
+  executor: DbExecutor = db,
+): Promise<Movement> {
+  const [movement] = await executor
     .insert(inventoryMovements)
     .values(input)
     .returning();

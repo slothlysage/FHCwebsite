@@ -1,14 +1,17 @@
 import { and, eq, isNull } from "drizzle-orm";
 
-import { db } from "@/lib/db/client";
+import { db, type DbExecutor } from "@/lib/db/client";
 import { products } from "@/lib/db/schema";
 
 type Product = typeof products.$inferSelect;
 type NewProduct = typeof products.$inferInsert;
 type ProductStatus = Product["status"];
 
-export async function createProduct(input: NewProduct): Promise<Product> {
-  const [product] = await db.insert(products).values(input).returning();
+export async function createProduct(
+  input: NewProduct,
+  executor: DbExecutor = db,
+): Promise<Product> {
+  const [product] = await executor.insert(products).values(input).returning();
   return product!;
 }
 
@@ -19,8 +22,9 @@ export async function getProductById(id: string): Promise<Product | undefined> {
 
 export async function getProductBySlug(
   slug: string,
+  executor: DbExecutor = db,
 ): Promise<Product | undefined> {
-  const [product] = await db
+  const [product] = await executor
     .select()
     .from(products)
     .where(eq(products.slug, slug));
@@ -48,8 +52,9 @@ export async function listProducts(options?: {
 export async function updateProduct(
   id: string,
   patch: Partial<NewProduct>,
+  executor: DbExecutor = db,
 ): Promise<Product | undefined> {
-  const [updated] = await db
+  const [updated] = await executor
     .update(products)
     .set({ ...patch, updatedAt: new Date() })
     .where(eq(products.id, id))
