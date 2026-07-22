@@ -32,10 +32,10 @@ you need to know is in this repository.
   in `fix_plan.md`, do the first, and stop.
 - **Never weaken a test to make it pass.** Never delete a test, never add
   `.skip`, never lower a coverage threshold, never add a file to coverage
-  exclusions. If a test is genuinely wrong, fix the test *and* explain why in
+  exclusions. If a test is genuinely wrong, fix the test _and_ explain why in
   the commit body.
 - **Never commit a secret.** Keys live in `.env.local` and in the host's secret
-  store. `.env.example` gets the key *name* only.
+  store. `.env.example` gets the key _name_ only.
 - **Never touch Stripe live mode.** Test mode keys only (`sk_test_*`,
   `pk_test_*`). Any task requiring live keys is a HUMAN GATE — stop and say so.
 - **Never run a destructive DB command** against anything but the local dev

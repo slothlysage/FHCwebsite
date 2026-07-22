@@ -47,34 +47,37 @@ before signature verification.
 
 Handled events:
 
-| Event | Action |
-|---|---|
-| `checkout.session.completed` | create order, decrement inventory, empty cart, send receipt |
-| `payment_intent.payment_failed` | log, leave draft unpaid, do not decrement stock |
-| `charge.refunded` | set order refunded/partially refunded, optionally restock |
-| `charge.dispute.created` | flag order, notify owner |
+| Event                           | Action                                                      |
+| ------------------------------- | ----------------------------------------------------------- |
+| `checkout.session.completed`    | create order, decrement inventory, empty cart, send receipt |
+| `payment_intent.payment_failed` | log, leave draft unpaid, do not decrement stock             |
+| `charge.refunded`               | set order refunded/partially refunded, optionally restock   |
+| `charge.dispute.created`        | flag order, notify owner                                    |
 
 Everything else: log and return 200.
 
 ### Idempotency
+
 Insert `event.id` into `webhook_events` **first**. A unique-constraint violation
 means we've seen it — return 200 immediately and do nothing else. Only after a
 successful insert do we process. Stripe retries, and it also delivers
 out of order; both must be harmless.
 
 ### Ordering
+
 `checkout.session.completed` can arrive before or after other events for the same
 payment. Handlers must be written so that arrival order doesn't matter — check
 current state before transitioning rather than assuming.
 
 ### Transactions
+
 Order creation, order items, inventory movements, and cart clearing happen in one
 database transaction. Email is sent **after** commit; a failed email must never
 roll back a paid order.
 
 ## Oversell
 
-Re-check stock at session creation *and* at webhook time. If stock is gone by
+Re-check stock at session creation _and_ at webhook time. If stock is gone by
 the time payment lands, the order is created in a `needs_attention` state and the
 owner is notified — we do not silently refund, because a hand-made business often
 can make one more.

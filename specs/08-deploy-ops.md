@@ -2,11 +2,11 @@
 
 ## Environments
 
-| | Database | Stripe | Domain |
-|---|---|---|---|
-| local | docker Postgres | test | localhost:3000 |
-| staging | Neon branch | test | staging.<domain> |
-| production | Neon main | **live** | <domain> |
+|            | Database        | Stripe   | Domain           |
+| ---------- | --------------- | -------- | ---------------- |
+| local      | docker Postgres | test     | localhost:3000   |
+| staging    | Neon branch     | test     | staging.<domain> |
+| production | Neon main       | **live** | <domain>         |
 
 Production secrets exist only in the Cloudflare dashboard. Nobody's laptop has
 live Stripe keys.

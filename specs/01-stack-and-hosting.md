@@ -2,17 +2,17 @@
 
 ## Decisions
 
-| Concern | Choice | Why |
-|---|---|---|
-| Framework | Next.js App Router + TS | Server rendering for SEO; one deployable |
-| DB | Postgres on Neon | Free tier, real SQL, branching for staging |
-| ORM | Drizzle | Typed, thin, migrations are plain SQL you can read |
-| Payments | Stripe Checkout (hosted) | Keeps card data off our servers entirely |
-| Hosting | Cloudflare Workers (`@opennextjs/cloudflare`) | Generous free tier, **commercial use permitted** |
-| Files | Cloudflare R2 | No egress fees |
-| Email | Resend | 3k/month free, good DX |
-| Analytics | Plausible or self-hosted Umami | Cookieless — no consent banner |
-| Errors | Sentry | Free tier sufficient |
+| Concern   | Choice                                        | Why                                                |
+| --------- | --------------------------------------------- | -------------------------------------------------- |
+| Framework | Next.js App Router + TS                       | Server rendering for SEO; one deployable           |
+| DB        | Postgres on Neon                              | Free tier, real SQL, branching for staging         |
+| ORM       | Drizzle                                       | Typed, thin, migrations are plain SQL you can read |
+| Payments  | Stripe Checkout (hosted)                      | Keeps card data off our servers entirely           |
+| Hosting   | Cloudflare Workers (`@opennextjs/cloudflare`) | Generous free tier, **commercial use permitted**   |
+| Files     | Cloudflare R2                                 | No egress fees                                     |
+| Email     | Resend                                        | 3k/month free, good DX                             |
+| Analytics | Plausible or self-hosted Umami                | Cookieless — no consent banner                     |
+| Errors    | Sentry                                        | Free tier sufficient                               |
 
 ## On "free hosting" — read this before choosing
 

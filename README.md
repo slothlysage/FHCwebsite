@@ -8,14 +8,14 @@ set direction by editing `specs/` and `fix_plan.md`; the agent does the typing.
 
 ## What's here
 
-| Path | Purpose |
-|---|---|
-| `PROMPT.md` | The prompt fed to the agent on every loop iteration. Do not bloat it. |
-| `AGENT.md` | House rules the agent must obey (also read by Claude Code as context). |
-| `fix_plan.md` | The ordered backlog. The agent picks the top unblocked item each pass. |
-| `specs/` | Source of truth for *what* to build. Agent reads these, never invents scope. |
-| `loop.sh` | Driver script that runs the agent repeatedly. |
-| `.github/workflows/ci.yml` | The gate. Coverage <80% = red build = not done. |
+| Path                       | Purpose                                                                      |
+| -------------------------- | ---------------------------------------------------------------------------- |
+| `PROMPT.md`                | The prompt fed to the agent on every loop iteration. Do not bloat it.        |
+| `AGENT.md`                 | House rules the agent must obey (also read by Claude Code as context).       |
+| `fix_plan.md`              | The ordered backlog. The agent picks the top unblocked item each pass.       |
+| `specs/`                   | Source of truth for _what_ to build. Agent reads these, never invents scope. |
+| `loop.sh`                  | Driver script that runs the agent repeatedly.                                |
+| `.github/workflows/ci.yml` | The gate. Coverage <80% = red build = not done.                              |
 
 ## Running the loop
 

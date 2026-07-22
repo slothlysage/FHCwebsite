@@ -10,7 +10,7 @@ churn (seasonal scents), single owner-operator doing fulfillment by hand.
 
 Cost per month at low volume, transaction fees, and the desire for a site that
 looks like the brand rather than like a theme. The replacement must not be
-*worse* at the boring parts Shopify did for free: taxes, inventory, receipts,
+_worse_ at the boring parts Shopify did for free: taxes, inventory, receipts,
 PCI scope, and not losing orders.
 
 ## Non-goals for v1

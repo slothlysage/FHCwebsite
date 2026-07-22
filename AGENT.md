@@ -51,13 +51,13 @@ that imports `db` directly is a review failure.
   `integer`. A `price: number` that could hold `19.99` is a bug.
 - The server recomputes every line total and the order total from the database
   at checkout time. Client-supplied prices are ignored, not validated.
-- Stripe is the source of truth for *payment status*. The database is the source
-  of truth for *catalog and inventory*.
+- Stripe is the source of truth for _payment status_. The database is the source
+  of truth for _catalog and inventory_.
 
 ## Commits
 
 Conventional commits: `feat|fix|test|chore|docs|refactor(scope): summary`.
-One task per commit. Body explains *why* if non-obvious.
+One task per commit. Body explains _why_ if non-obvious.
 
 ## Style
 

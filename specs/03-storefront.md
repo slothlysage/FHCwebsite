@@ -21,15 +21,15 @@ $30, in stock, cheapest first."
 
 Query parameters:
 
-| Param | Values | Notes |
-|---|---|---|
-| `category` | category slug, repeatable | multiple = OR within categories |
-| `scent` | attribute value, repeatable | OR within scents |
-| `size` | attribute value, repeatable | OR within sizes |
-| `minPrice` / `maxPrice` | integer dollars | inclusive; compares against the variant price range |
-| `inStock` | `true` | presence-only flag |
-| `sort` | `newest` \| `price_asc` \| `price_desc` \| `name_asc` | default `newest` |
-| `page` | integer >= 1 | default 1 |
+| Param                   | Values                                                | Notes                                               |
+| ----------------------- | ----------------------------------------------------- | --------------------------------------------------- |
+| `category`              | category slug, repeatable                             | multiple = OR within categories                     |
+| `scent`                 | attribute value, repeatable                           | OR within scents                                    |
+| `size`                  | attribute value, repeatable                           | OR within sizes                                     |
+| `minPrice` / `maxPrice` | integer dollars                                       | inclusive; compares against the variant price range |
+| `inStock`               | `true`                                                | presence-only flag                                  |
+| `sort`                  | `newest` \| `price_asc` \| `price_desc` \| `name_asc` | default `newest`                                    |
+| `page`                  | integer >= 1                                          | default 1                                           |
 
 Combination logic: different facets AND together, values within one facet OR
 together. This is what shoppers expect and getting it backwards is the classic
@@ -40,15 +40,17 @@ Do not fetch everything and filter in JavaScript — it breaks as soon as the
 catalog grows and it breaks pagination immediately.
 
 ### Edge cases the tests must cover
+
 - Unknown parameter values → ignored, not a 500
 - `minPrice` > `maxPrice` → empty result with a clear message, not an error
 - Zero results → "no products match" plus a working "clear filters" link
-- A product with multiple variants at different prices → matches if *any*
+- A product with multiple variants at different prices → matches if _any_
   variant falls in the range; displays "from $X"
 - Sorting by price with variants → sort on the minimum active variant price
 - Tie-break every sort on `id` so pagination is stable
 
 ### UI
+
 - Mobile: filters in a bottom sheet behind a "Filter" button with an active count
 - Desktop: sidebar
 - Active filters shown as removable chips
