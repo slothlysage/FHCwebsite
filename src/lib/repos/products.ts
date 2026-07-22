@@ -1,4 +1,4 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 
 import { db, type DbExecutor } from "@/lib/db/client";
 import { products } from "@/lib/db/schema";
@@ -46,7 +46,8 @@ export async function listProducts(options?: {
   return db
     .select()
     .from(products)
-    .where(conditions.length > 0 ? and(...conditions) : undefined);
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(desc(products.createdAt));
 }
 
 export async function updateProduct(

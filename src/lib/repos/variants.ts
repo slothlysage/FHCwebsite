@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 import { db, type DbExecutor } from "@/lib/db/client";
 import { productVariants } from "@/lib/db/schema";
@@ -57,6 +57,40 @@ export async function listActiveVariantsByProductId(
         eq(productVariants.isActive, true),
       ),
     );
+}
+
+// Batch form of listActiveVariantsByProductId for listing pages — one query
+// instead of N. A product with no active variants has no key in the
+// returned map (mirrors getStockForVariants' "absent means zero" contract
+// for the products case: callers must handle a missing key explicitly).
+export async function listActiveVariantsByProductIds(
+  productIds: string[],
+): Promise<Map<string, Variant[]>> {
+  const variantsByProduct = new Map<string, Variant[]>();
+  if (productIds.length === 0) {
+    return variantsByProduct;
+  }
+
+  const rows = await db
+    .select()
+    .from(productVariants)
+    .where(
+      and(
+        inArray(productVariants.productId, productIds),
+        eq(productVariants.isActive, true),
+      ),
+    );
+
+  for (const row of rows) {
+    const existing = variantsByProduct.get(row.productId);
+    if (existing) {
+      existing.push(row);
+    } else {
+      variantsByProduct.set(row.productId, [row]);
+    }
+  }
+
+  return variantsByProduct;
 }
 
 export async function updateVariant(

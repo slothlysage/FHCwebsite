@@ -90,6 +90,27 @@ describe("products repo", () => {
     expect(listedIds).not.toContain(deleted.id);
   });
 
+  it("lists published products newest-first", async () => {
+    const older = await createProduct({
+      slug: "test-list-order-older",
+      name: "Older",
+      status: "published",
+    });
+    insertedIds.push(older.id);
+    const newer = await createProduct({
+      slug: "test-list-order-newer",
+      name: "Newer",
+      status: "published",
+    });
+    insertedIds.push(newer.id);
+
+    const listed = await listProducts({ status: "published" });
+    const olderIndex = listed.findIndex((p) => p.id === older.id);
+    const newerIndex = listed.findIndex((p) => p.id === newer.id);
+
+    expect(newerIndex).toBeLessThan(olderIndex);
+  });
+
   it("lists across all statuses when no status filter is given", async () => {
     const draft = await createProduct({
       slug: "test-list-no-filter-draft",

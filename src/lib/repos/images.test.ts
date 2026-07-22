@@ -4,7 +4,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db/client";
 import { productImages, products } from "@/lib/db/schema";
 import { createProduct } from "@/lib/repos/products";
-import { replaceProductImages } from "@/lib/repos/images";
+import {
+  listPrimaryImagesByProductIds,
+  replaceProductImages,
+} from "@/lib/repos/images";
 
 // Integration tests against a real Postgres (specs/06-testing.md). Requires
 // DATABASE_URL to point at a migrated database — see AGENT.md's `db:migrate`.
@@ -106,5 +109,41 @@ describe("images repo", () => {
       .from(productImages)
       .where(eq(productImages.productId, product.id));
     expect(stored).toHaveLength(0);
+  });
+
+  it("returns the lowest-position image per product, keyed by product id", async () => {
+    const withImages = await makeProduct("test-images-primary-with-images");
+    const noImages = await makeProduct("test-images-primary-none");
+    await replaceProductImages(withImages.id, [
+      {
+        url: "https://example.com/second.jpg",
+        altText: "Second",
+        position: 2,
+        width: 0,
+        height: 0,
+      },
+      {
+        url: "https://example.com/first.jpg",
+        altText: "First",
+        position: 1,
+        width: 0,
+        height: 0,
+      },
+    ]);
+
+    const primary = await listPrimaryImagesByProductIds([
+      withImages.id,
+      noImages.id,
+    ]);
+
+    expect(primary.get(withImages.id)?.url).toBe(
+      "https://example.com/first.jpg",
+    );
+    expect(primary.has(noImages.id)).toBe(false);
+  });
+
+  it("returns an empty map for an empty id list", async () => {
+    const primary = await listPrimaryImagesByProductIds([]);
+    expect(primary.size).toBe(0);
   });
 });

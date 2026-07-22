@@ -549,7 +549,7 @@ import.test.ts` (5 integration tests against the real dev
       scale rather than inventing custom values; nothing in the spec calls for
       a non-default scale yet.
       New `src/components/site-header.tsx` (logo linking `/`, `<nav
-  aria-label="Main">` with Shop/About/Contact, a `/cart` link whose
+aria-label="Main">` with Shop/About/Contact, a `/cart` link whose
       `aria-label` carries a hardcoded `Cart, 0 items` — real count wiring is
       2.7's job, this just proves the indicator slot exists) and
       `src/components/site-footer.tsx` (`<nav aria-label="Policies">` with all
@@ -576,7 +576,7 @@ import.test.ts` (5 integration tests against the real dev
       AC met for the "renders at 360/768/1440 with no horizontal scroll" half
       via a real browser, not jsdom (jsdom has no layout engine to assert
       against): installed Playwright's Chromium (`npx playwright install
-    chromium`; `--with-deps` failed, no passwordless sudo in this sandbox,
+  chromium`; `--with-deps` failed, no passwordless sudo in this sandbox,
       but the browser-only download didn't need it), ran the dev server, and
       measured `document.documentElement.scrollWidth` vs `clientWidth` at all
       three widths — equal (no overflow) at each, screenshots visually
@@ -593,11 +593,85 @@ import.test.ts` (5 integration tests against the real dev
       99.56% coverage (global 80% floor, 90% floor for services — both clear),
       build passes.
 
-- [ ] **2.2 All-products page**
-      Deps: 1.3, 2.1. Server-rendered grid.
-      AC: renders all published products with image, name, price-from, and
-      out-of-stock state. Unpublished products are absent from the HTML, not
-      hidden with CSS.
+- [x] **2.2 All-products page**
+      Deps: 1.3, 2.1. `src/app/(storefront)/products/page.tsx` — async Server
+      Component, `export const dynamic = "force-dynamic"` (catalog/stock
+      change independently of deploys per AGENT.md's "database is the source
+      of truth for catalog and inventory" — without this the route got
+      statically prerendered at build time, confirmed by `next build`'s
+      route table showing `○ /products` before the fix and `ƒ /products`
+      after; a real bug caught by actually reading `npm run build` output,
+      not just green tests).
+      New service `src/lib/services/product-listing.ts` —
+      `getPublishedProductListing()`: three queries total regardless of
+      catalog size (products, batch active-variants-by-product-ids, batch
+      primary-images-by-product-ids) plus a batch stock lookup via the
+      existing `getStockForVariants` — never N+1 per product. Computes
+      `priceFromCents` (min active-variant price, `null` if none) and
+      `inStock` (any active variant with summed stock > 0) per product.
+      Two new batch repo functions, following the existing
+      `getStockForVariants` "absent key = zero/none" convention: `src/lib/
+repos/variants.ts`'s `listActiveVariantsByProductIds` and `src/lib/repos/
+images.ts`'s `listPrimaryImagesByProductIds` (uses `db.selectDistinctOn`,
+      not a method on the query object — this drizzle version
+      (`0.45.2`) exposes it only as `db.selectDistinctOn([cols]).from(...)`,
+      confirmed by inspecting the built package since the typed `.d.ts`
+      chain has no `.distinct()`/`.distinctOn()` instance method).
+      `src/lib/repos/products.ts`'s `listProducts` now orders
+      `desc(createdAt)` by default (newest-first, matching the spec's
+      default `sort=newest` and the `products_status_created_at_idx` index
+      that already existed for exactly this) — additive, doesn't break any
+      existing `toContain`-style test.
+      New pure util `src/lib/format.ts` — `formatPriceCents` (`Intl.
+NumberFormat` cents→`"$19.99"`), and two presentational components:
+      `src/components/product-card.tsx` (image or "No image" placeholder,
+      name linking `/products/[slug]`, price-from, "Out of stock" label) and
+      `src/components/product-grid.tsx` (renders a `<ul>` of cards or an
+      empty-state message — the spec's "every list has an empty state").
+      Plain `<img>`, not `next/image` — no image hosting/remote-pattern
+      config exists yet (real R2 hosting is 4.5's job, `next/image` sizing
+      is 5.4's); an `eslint-disable` on that line names both.
+      Tests: `product-listing.test.ts` (6 integration tests against the real
+      dev database — excludes draft/archived, price-from ignores deactivated
+      variants, out-of-stock/in-stock via real `inventory_movements` rows,
+      no-variants product has `null` price and is out-of-stock, primary
+      image by lowest position or `null`), `format.test.ts` (3 unit tests),
+      `product-card.test.tsx` / `product-grid.test.tsx` (12 RTL tests
+      including `jest-axe`), `products/page.test.tsx` (2 tests — an async
+      Server Component is invoked and awaited directly,
+      `render(await ProductsPage())`, then asserted with RTL like any other
+      component; this is the pattern future storefront route tests should
+      follow), plus new batch-function tests in `variants.test.ts`/
+      `images.test.ts`/`products.test.ts`. Confirmed every new test red for
+      the right reason (import-resolution or assertion failure against
+      not-yet-written code) before implementing.
+      AC met, verified two ways: the test suite above, and a real browser —
+      seeded the dev DB via `npm run import-catalog -- tests/fixtures/
+catalog.csv --apply` (all rows import as `draft` by default), published
+      three products directly in Postgres, ran `next dev`, and used
+      Playwright's CLI screenshot (`npx playwright screenshot`) against
+      `localhost:3000/products`: the three published products rendered with
+      name/price-from/"Out of stock", the ~35 still-draft products (e.g.
+      "Bar Soap", "Wax Melts") were absent from the HTML entirely (confirmed
+      via `curl | grep`, not just visually), and adding a real
+      `inventory_movements` row for one variant flipped its card from
+      "Out of stock" to no badge on a second screenshot. Reverted both
+      manual DB changes afterward. `npm run verify` green: 22 files, 125
+      tests, 99.63%/97.94%/100%/99.63% global coverage (`product-listing.ts`
+      itself 94/80/100/94 stmts/branch/funcs/lines — the one uncovered
+      branch is the empty-catalog early return, not covered because
+      asserting "zero published products" against a shared dev database that
+      other test files write to would be flakiness bait, not a real test;
+      the aggregate `src/lib/services/**` threshold, which is what the gate
+      actually enforces, clears 90% easily), build passes.
+      NOTE for 2.3: `getPublishedProductListing`'s three-query shape is the
+      thing to extend with `WHERE`/`ORDER BY`/`LIMIT` for filter/sort/
+      pagination, not replace — the batch-map pattern for variants/images/
+      stock still applies once a `WHERE` clause narrows which products come
+      back first.
+      NOTE for 2.5/2.6: no product-detail route exists yet, so `ProductCard`
+      links to `/products/[slug]` paths that 404 today — expected, that's
+      2.5's job.
 
 - [ ] **2.3 Sort and filter**
       Deps: 2.2. See `specs/03-storefront.md`.

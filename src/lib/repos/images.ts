@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 
 import { db, type DbExecutor } from "@/lib/db/client";
 import { productImages } from "@/lib/db/schema";
@@ -28,4 +28,29 @@ export async function replaceProductImages(
     .insert(productImages)
     .values(images.map((image) => ({ ...image, productId })))
     .returning();
+}
+
+// One image per product — the lowest `position` — for listing pages that
+// show a single thumbnail. `selectDistinctOn` requires its `orderBy` to lead
+// with the same column(s) it's distinct-ing on (product_id), so within-group
+// ordering by position comes second.
+export async function listPrimaryImagesByProductIds(
+  productIds: string[],
+): Promise<Map<string, Image>> {
+  const primaryImages = new Map<string, Image>();
+  if (productIds.length === 0) {
+    return primaryImages;
+  }
+
+  const rows = await db
+    .selectDistinctOn([productImages.productId])
+    .from(productImages)
+    .where(inArray(productImages.productId, productIds))
+    .orderBy(productImages.productId, productImages.position);
+
+  for (const row of rows) {
+    primaryImages.set(row.productId, row);
+  }
+
+  return primaryImages;
 }
