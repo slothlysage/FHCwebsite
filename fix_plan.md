@@ -16,18 +16,35 @@ is demonstrably true and `npm run verify` is green.
   AC: `npm run dev` serves a page; `npm run build` succeeds; `tsconfig.json` has
   `strict: true`, `noUncheckedIndexedAccess: true`.
 
-- [ ] **0.2 Test harness + coverage gate**
+- [x] **0.2 Test harness + coverage gate**
   Deps: 0.1.
   Vitest + RTL + jsdom, `@vitest/coverage-v8`. Thresholds per `AGENT.md`
   (80% global; 90% for `src/lib/services/**` and `src/lib/stripe/**`).
-  Add one trivial passing test to prove the harness runs.
-  AC: `npm run test:coverage` fails the build when a threshold is unmet
-  (verify by temporarily adding an uncovered file, then remove it).
-  NOTE: `vitest.config.ts` and a coverage-gated CI workflow already exist
-  (created by an earlier iteration ahead of schedule). `tsconfig.json`
-  currently excludes `vitest.config.ts` and `tests/` from typecheck because
-  `vitest` isn't installed yet — installing it as part of 0.2 and removing
-  those two exclude entries is part of this task's AC.
+  Added `src/app/page.test.tsx` (RTL, asserts the heading renders) to prove
+  the harness runs — 100% coverage on the only real source file so far.
+  AC met: `npm run test:coverage` was verified to fail the global 80%
+  threshold with a deliberately uncovered scratch file, then pass again once
+  it was removed.
+  `tsconfig.json`'s `exclude` no longer drops `vitest.config.ts`/`tests/`.
+  NOTE for future iterations — install/config gotchas hit on this sandbox
+  (Node 20.15, npm 10.7):
+  - `npm install` did not fetch the platform-specific
+    `@rolldown/binding-linux-x64-gnu` optional dep that `vite@8`'s hard
+    `rolldown` dependency needs (npm optional-deps bug). Fixed by
+    `npm install --no-save @rolldown/binding-linux-x64-gnu@1.1.5`. If a fresh
+    clone fails at `vitest run` with "Cannot find native binding", that's the
+    cause.
+  - Vite/Vitest config loading via CJS `require()` broke on an ESM-only
+    transitive dep (`std-env`) because the package has no `"type": "module"`.
+    Fixed by naming the config `vitest.config.mts` (forces ESM regardless of
+    package `type`) rather than adding `"type": "module"` to `package.json`
+    (which would be a bigger, riskier change for Next's own build).
+  - `jsdom@29.x` pulls `html-encoding-sniffer@6`, which is ESM-only
+    (`@exodus/bytes`) and breaks under vitest's CJS worker `require()`.
+    Pinned `jsdom` to `26.1.0`, the last line whose `html-encoding-sniffer`
+    dependency (`^4.0.0`) is CJS. Revisit the pin when vitest's default test
+    environment loader handles ESM deps, or when jsdom's own require path
+    is fixed upstream.
 
 - [ ] **0.3 Lint, format, and the `verify` script**
   Deps: 0.2.

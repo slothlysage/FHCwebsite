@@ -15,3 +15,4 @@ test-results/
 .wrangler/
 .open-next/
 .vercel/
+*.tsbuildinfo

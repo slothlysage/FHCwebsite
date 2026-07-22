@@ -49,10 +49,34 @@ $5/mo Postgres on Railway or Fly, not a bigger web host.
   no `tailwind.config.*` file — v4 configures via `@theme` in `globals.css`).
 - `next build` type-checks every `.ts`/`.tsx` file reachable from
   `tsconfig.json`'s `include`, not just app code. `vitest.config.ts` (added
-  ahead of schedule by task 0.2's prep work) breaks the build until `vitest`
-  is an installed dependency, so it and `tests/` are temporarily listed in
-  `tsconfig.json`'s `exclude`. Remove both exclude entries once 0.2 installs
-  vitest.
+  ahead of schedule by task 0.2's prep work) broke the build until `vitest`
+  was an installed dependency, so it and `tests/` were temporarily listed in
+  `tsconfig.json`'s `exclude`. Both entries were removed once 0.2 installed
+  vitest — see "Scaffolding notes (0.2)" below.
+
+## Scaffolding notes (0.2)
+
+Installing the test harness (Vitest + RTL + jsdom) on this sandbox
+(Node 20.15.0, npm 10.7.0) hit three unrelated install/loader bugs, not
+anything specific to this repo. If a fresh clone fails the same way, this is
+why:
+
+- `npm install` silently failed to fetch the platform-specific optional dep
+  `@rolldown/binding-linux-x64-gnu` that `vite@8`'s (a `vitest` dependency)
+  hard `rolldown` dependency needs at runtime — a known npm optional-deps
+  bug. Symptom: `vitest run` fails at startup with "Cannot find native
+  binding". Fix: `npm install --no-save @rolldown/binding-linux-x64-gnu@1.1.5`
+  (swap the platform suffix if not linux-x64-gnu).
+- `package.json` has no `"type": "module"` (Next.js apps typically don't),
+  so Vite loads `vitest.config.ts` via CJS `require()`, which broke on an
+  ESM-only transitive dep (`std-env`). Fixed by naming the config
+  `vitest.config.mts` instead — the `.mts` extension forces ESM loading
+  regardless of `package.json`'s `type`, without touching Next's own build.
+- `jsdom@29.x`'s dependency `html-encoding-sniffer@6` is ESM-only
+  (`@exodus/bytes`) and breaks under vitest's CJS worker `require()`. Pinned
+  `jsdom` to `26.1.0` (last line depending on `html-encoding-sniffer ^4.0.0`,
+  which is CJS). Revisit this pin periodically — it's a workaround, not a
+  permanent constraint.
 
 ## Alternative if the agent struggles with the Cloudflare adapter
 
