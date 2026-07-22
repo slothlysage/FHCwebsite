@@ -39,6 +39,16 @@ database — see `db:migrate`/`db:reset` in `AGENT.md`) already running.
 
 **Component** — RTL. Assert behavior and accessible output, not implementation.
 Query by role and label, never by test id unless there is no alternative.
+Accessibility: `jest-axe` (`expect(await axe(container)).toHaveNoViolations()`)
+on every component with a real DOM shape (not `toBeTruthy()`-style padding).
+`tests/setup.ts` registers `afterEach(cleanup)` from `@testing-library/react`
+explicitly — `vitest.config.mts` does not set `test.globals: true`, so RTL's
+automatic-cleanup detection (which looks for a global `afterEach`) does not
+fire on its own. Without it, every test after the first in a file leaves its
+rendered tree in `document.body`, which both makes later `getByRole` queries
+match stale duplicates from earlier tests and makes axe report spurious
+landmark-uniqueness violations (e.g. `landmark-no-duplicate-banner`) against
+elements that don't even belong to the current test.
 
 **E2E (fewest)** — Playwright, real browser, test-mode Stripe. Covers the paths
 where money moves.

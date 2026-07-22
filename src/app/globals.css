@@ -1,26 +1,36 @@
 @import "tailwindcss";
 
+/*
+ * Placeholder brand palette — warm, handmade-goods neutrals with a terracotta
+ * accent. Swap these values once real brand colors/logo are supplied (see
+ * fix_plan.md "Blocked — needs human"); everything else in the shell is built
+ * against the semantic names below, not the hex values, so the swap is a
+ * one-file change.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --color-cream: #faf6f0;
+  --color-ink: #2b2420;
+  --color-clay: #c1694f;
+  --color-clay-dark: #a8523c;
+  --color-sage: #8a9a80;
+  --color-sand: #ede4d3;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-cream: var(--color-cream);
+  --color-ink: var(--color-ink);
+  --color-clay: var(--color-clay);
+  --color-clay-dark: var(--color-clay-dark);
+  --color-sage: var(--color-sage);
+  --color-sand: var(--color-sand);
+  --color-background: var(--color-cream);
+  --color-foreground: var(--color-ink);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
 }

@@ -49,7 +49,9 @@ describe("local dev database (docker-compose)", () => {
 
     expect(pkg.scripts["db:reset"]).toBeDefined();
 
-    const match = /node\s+(\S+\.mjs)/.exec(pkg.scripts["db:reset"]!);
+    const match = /node\s+(?:--\S+\s+)*(\S+\.mjs)/.exec(
+      pkg.scripts["db:reset"]!,
+    );
     expect(match).not.toBeNull();
     const scriptPath = path.join(repoRoot, match![1]!);
     expect(existsSync(scriptPath)).toBe(true);

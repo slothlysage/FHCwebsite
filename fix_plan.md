@@ -476,13 +476,13 @@ Value`, `Variant Compare At Price`, `Image Src`, `Image Position`,
 
   - [x] **1.4b Dry-run diff + apply + seed CLI**
         Deps: 1.4a. `src/lib/services/catalog-import.ts` — `runCatalogImport
-    (parsedProducts, {apply})` diffs parsed products against the
+(parsedProducts, {apply})` diffs parsed products against the
         current catalog (product by slug, each variant by SKU, via the
         products/variants repos) into per-product/per-variant
         `create`/`update`/`unchanged` actions; dry-run (`apply: false`)
         only reads and reports, `apply: true` writes everything inside one
         transaction. `scripts/import-catalog.mts` — CLI wrapper (`npm run
-    import-catalog -- <file.csv> [--apply]`, dry-run is the default,
+import-catalog -- <file.csv> [--apply]`, dry-run is the default,
         prints row errors then the diff/apply summary).
         `ParsedVariant` (1.4a) gained a `stockQuantity` field — parsed from
         the optional `Variant Inventory Qty` column, defaulting to `0` — so
@@ -510,7 +510,7 @@ Value`, `Variant Compare At Price`, `Image Src`, `Image Position`,
         duplicated already-tested code — the one thing this loop's own
         instructions call out as the most common failure mode.
         AC met (partially — see gate below): `src/lib/services/catalog-
-    import.test.ts` (5 integration tests against the real dev
+import.test.ts` (5 integration tests against the real dev
         database) proves create/update/unchanged actions, that dry-run
         writes nothing, and — the AC's actual idempotency requirement —
         that applying the same parsed input twice produces no duplicate
@@ -533,11 +533,65 @@ Value`, `Variant Compare At Price`, `Image Src`, `Image Position`,
 
 ## Phase 2 — Storefront
 
-- [ ] **2.1 Design tokens + layout shell**
-      Deps: 0.1. Brand colors, type scale, spacing in Tailwind config. Header with
-      nav + cart indicator, footer with policy links. Mobile-first.
-      AC: layout renders at 360px, 768px, 1440px with no horizontal scroll;
-      axe reports zero violations on the shell.
+- [x] **2.1 Design tokens + layout shell**
+      Deps: 0.1. Tailwind v4 keeps tokens in CSS, not a `tailwind.config.ts` —
+      `src/app/globals.css`'s `:root`/`@theme inline` blocks now define a
+      brand palette (`cream`/`ink`/`clay`/`clay-dark`/`sage`/`sand`) generating
+      `bg-cream`, `text-ink`, `bg-clay`, etc. utilities. **These are placeholder
+      values** (warm neutrals + a terracotta accent, picked to fit "handmade
+      candles + body butter" without real brand input) — everything downstream
+      is built against the semantic names, not the hex codes, so swapping in
+      the owner's real logo/palette later is a one-file edit, not a rebuild.
+      See the "Blocked" entry below, updated to reflect this. Removed the
+      scaffold's OS-`prefers-color-scheme` dark-mode flip — a single fixed
+      brand palette, not an adaptive one, is the right call for a storefront
+      with a defined identity. Type scale/spacing: reused Tailwind v4's default
+      scale rather than inventing custom values; nothing in the spec calls for
+      a non-default scale yet.
+      New `src/components/site-header.tsx` (logo linking `/`, `<nav
+  aria-label="Main">` with Shop/About/Contact, a `/cart` link whose
+      `aria-label` carries a hardcoded `Cart, 0 items` — real count wiring is
+      2.7's job, this just proves the indicator slot exists) and
+      `src/components/site-footer.tsx` (`<nav aria-label="Policies">` with all
+      seven policy links from `specs/03-storefront.md`'s route list). Both are
+      plain Server Components (no interactivity yet, so no `"use client"`).
+      Wired into `src/app/layout.tsx` around `{children}`, which is now wrapped
+      in the page's single `<main>` landmark — moved `src/app/page.tsx`'s own
+      top-level element from `<main>` to a `<div>` so pages don't nest a second
+      `<main>` inside the layout's.
+      `site-header.test.tsx` / `site-footer.test.tsx` (7 RTL tests total):
+      logo href, nav landmark + link hrefs, cart indicator accessible name,
+      every policy link, and an axe (`jest-axe`) zero-violations assertion per
+      component. Confirmed red first (import-resolution error, components
+      didn't exist).
+      Added `jest-axe` + `@types/jest-axe` as devDependencies. `tests/setup.ts`
+      now also calls `expect.extend(toHaveNoViolations)` and, importantly,
+      registers `afterEach(cleanup)` from `@testing-library/react` — without
+      it, `vitest.config.mts` not setting `test.globals: true` meant RTL's
+      auto-cleanup detection didn't kick in, so every test after the first in
+      a file left its rendered tree in `document.body`, which made later
+      `getByRole` queries match stale duplicates and made axe report
+      `landmark-no-duplicate-banner`. This will matter for every future
+      component test file, not just these two.
+      AC met for the "renders at 360/768/1440 with no horizontal scroll" half
+      via a real browser, not jsdom (jsdom has no layout engine to assert
+      against): installed Playwright's Chromium (`npx playwright install
+    chromium`; `--with-deps` failed, no passwordless sudo in this sandbox,
+      but the browser-only download didn't need it), ran the dev server, and
+      measured `document.documentElement.scrollWidth` vs `clientWidth` at all
+      three widths — equal (no overflow) at each, screenshots visually
+      confirmed the header/footer wrap sanely with no clipped content.
+      Also fixed a pre-existing, unrelated failure hit while running
+      `npm run verify`: `tests/unit/docker-compose.test.ts`'s
+      `db:reset`-script-exists regex (`/node\s+(\S+\.mjs)/`) predated
+      aeaecb4's `node --env-file=.env.local scripts/db-reset.mjs` change and
+      no longer matched with the flag in between — confirmed this was already
+      broken on `main` before this task (same failure on `git stash`), fixed
+      the regex to tolerate `--flag` tokens between `node` and the script
+      path rather than touching the flag itself.
+      Full `npm run verify` green: 17 files, 97 tests, 99.57%/98.36%/100%/
+      99.56% coverage (global 80% floor, 90% floor for services — both clear),
+      build passes.
 
 - [ ] **2.2 All-products page**
       Deps: 1.3, 2.1. Server-rendered grid.
@@ -774,7 +828,12 @@ Value`, `Variant Compare At Price`, `Image Src`, `Image Position`,
 
 _(agent appends here; do not guess around a blocker)_
 
-- Brand assets: logo, color palette, product photography — needed for 2.1.
+- Brand assets: logo, real color palette, product photography. 2.1 shipped
+  with a placeholder warm-neutral/terracotta palette (`src/app/globals.css`)
+  so the layout shell could be built and tested now — swapping in the owner's
+  actual palette/logo later is a one-file edit. Still needed before launch,
+  and definitely before 2.6 (OG images) and 5.4 (Lighthouse/LCP image) make
+  photography decisions load-bearing.
 - Policy copy: shipping, returns, privacy, terms — needed for 2.8.
 - Confirmation on cosmetics labeling: MoCRA requires an ingredient list and a
   responsible-person contact for body butter; candles need ASTM F2417 fire-safety
