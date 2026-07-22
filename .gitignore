@@ -1,0 +1,17 @@
+node_modules/
+.next/
+out/
+build/
+dist/
+coverage/
+.env
+.env.local
+.env*.local
+*.log
+.loop-logs/
+.DS_Store
+playwright-report/
+test-results/
+.wrangler/
+.open-next/
+.vercel/
