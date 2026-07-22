@@ -163,3 +163,23 @@ inventory_movements GROUP BY variant_id`. A plain view recomputes on every
   (create/getById/getByStripeSessionId/listByStatus/update). 3.5 (order
   creation + inventory decrement) and 4.6 (orders dashboard) will need one —
   add it there against their actual read shape, rather than guessing one now.
+
+## Implementation notes (1.4a — CSV catalog importer, parse stage)
+
+- `src/lib/services/catalog-importer.ts`'s `parseShopifyCsv` targets
+  Shopify's standard product CSV export column layout directly (`Handle`,
+  `Title`, `Body (HTML)`, `Tags`, `Option1/2/3 Value`, `Variant SKU`,
+  `Variant Price`, `Variant Compare At Price`, `Variant Grams`, `Image Src`,
+  `Image Position`, `Image Alt Text`) — there is no repo-specific CSV spec to
+  diverge from, so this is the format to keep matching if Shopify changes it.
+- `product_variants.weight_grams` is `NOT NULL` with no `.default()`, so
+  `Variant Grams` is a required column for the importer even though nothing
+  above marks it required for other reasons — a row that parses fine
+  otherwise but has a non-numeric/blank grams value is rejected at the row
+  level, not coerced to `0`.
+- Parsed output has no `productId`/`variantId`/`categoryId` — this stage
+  never touches the database (no `db` import), by design, so it's cheap to
+  unit test exhaustively. 1.4b is responsible for diffing parsed slugs/SKUs
+  against `products`/`product_variants` and creating `categories` rows for
+  any `ParsedProduct.categories` string that doesn't already have a matching
+  `categories.slug`.

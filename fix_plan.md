@@ -407,6 +407,90 @@ variant_id` — a plain, not materialized, view so it's always fresh with
       malformed rows are reported, not silently dropped; unit tests cover missing
       columns, duplicate SKUs, and non-numeric prices.
       🚦 HUMAN GATE — confirm the parsed catalog before the first non-dry-run.
+      Split into sub-tasks below (parse/validate is pure and independently
+      testable from the DB-writing/diff side, same rationale as 1.3's split).
+      This umbrella item is ticked `[x]` only once both below are `[x]`.
+
+  - [x] **1.4a CSV parser + validation**
+        Deps: 1.3. `src/lib/services/catalog-importer.ts` — pure, DB-free
+        `parseShopifyCsv(csvText)` using the `csv-parse` package (added as a
+        dependency; RFC 4180 quoting/embedded-comma/newline handling is
+        exactly what a hand-rolled split(",") gets wrong, and `Body (HTML)`
+        routinely contains commas). Rows are grouped by `Handle` via a
+        `Map` (insertion order = output order); the first row seen for a
+        handle carries product-level fields (`Title`, `Body (HTML)`, `Tags`
+        → `categories`), later rows with the same handle add variants and/or
+        images and leave product-level columns blank — matching Shopify's
+        real export shape.
+        Required columns: `Handle`, `Title`, `Variant SKU`, `Variant Price`,
+        `Variant Grams` (the last because `product_variants.weight_grams` is
+        `NOT NULL` with no default per `specs/02-data-model.md`). Missing
+        required columns are a whole-file error (`row: 0, handle: null`,
+        one entry per missing column) and abort parsing — a header problem
+        invalidates every row, so partial output would be misleading.
+        Row-level problems (blank `Handle`, blank `Title` on a new handle,
+        duplicate SKU anywhere in the file, non-numeric `Variant
+    Price`/`Variant Compare At Price`/`Variant Grams`) are collected into
+        an `errors: ImportRowError[]` array with a 1-based data-row number
+        and the offending handle; the row/variant is skipped, not thrown,
+        and parsing continues — this is what "malformed rows are reported,
+        not silently dropped" means in practice; 1.4b decides whether any
+        errors should block a real `--apply` run.
+        A row with a blank `Variant SKU` but a non-empty `Handle` is treated
+        as an image-only continuation row (real Shopify exports use these to
+        attach extra product images without adding a variant), not an error.
+        `src/lib/services/catalog-importer.test.ts` — 12 unit tests: a
+        well-formed multi-variant/multi-image product, every missing-required-
+        column case at once, duplicate SKU (second occurrence dropped, first
+        kept), non-numeric price/compare-at-price/weight (each skips only
+        that variant), blank Handle, blank Title on a new handle, an
+        image-only continuation row, a minimal CSV containing only the five
+        required columns (proves optional-column-absent files still parse),
+        a CSV missing only `Image Alt Text` (defaults to `""`), and the
+        empty-catalog case. Confirmed red first (import resolution error,
+        module didn't exist) before writing `catalog-importer.ts`.
+        AC met: 100% statement/branch/function/line coverage on the module
+        (exceeds the 90% `src/lib/services/**` floor); full `npm run verify`
+        green (12 files, 74 tests, 100% global coverage, build passes).
+        NOTE for 1.4b: `raw[column]!.trim()` (non-null assertion) is used for
+        the five required columns, not `?.trim() ?? ""` — after the header
+        check confirms they exist, and because `csv-parse` rejects any data
+        row whose column count doesn't match the header (confirmed: a short
+        row throws `Invalid Record Length`, it doesn't silently pad with
+        `undefined`), those keys are runtime-guaranteed strings despite
+        `noUncheckedIndexedAccess` typing bare indexed access as possibly
+        `undefined`. The `?.trim() ?? ""` / `|| null` pattern is kept only for
+        genuinely optional columns (`Tags`, `Body (HTML)`, `Option1/2/3
+    Value`, `Variant Compare At Price`, `Image Src`, `Image Position`,
+        `Image Alt Text`) that a minimal export may omit entirely.
+        NOTE for 1.4b: `parseShopifyCsv` does not enforce "every product has
+        at least one variant" (a spec-level expectation, not a DB
+        constraint) — a product whose only variant row had a parse error
+        comes back with `variants: []`. 1.4b's diff/apply step must decide
+        whether to skip such a product or surface it as blocking, not assume
+        the array is non-empty.
+        NOTE for 1.4b: `slug` is derived as `handle.toLowerCase()` — Shopify
+        handles are already URL-safe/hyphenated, so no further slugify step
+        was needed. If a future non-Shopify source feeds this parser, that
+        assumption would need revisiting.
+
+  - [ ] **1.4b Dry-run diff + apply + seed CLI**
+        Deps: 1.4a. Takes parsed products from 1.4a and diffs them against the
+        current catalog (via the products/variants repos from 1.3a/b) to
+        report creates/updates/unchanged. Dry-run mode (default) only prints
+        the diff. A CLI script (`scripts/import-catalog.mjs`, `--dry-run` by
+        default, explicit `--apply` flag required to write) applies the
+        import transactionally, writing products, variants, images, and
+        tag→category links, and records an `import` reason
+        `inventory_movements` row per variant per `specs/02-data-model.md`'s
+        `reason` enum.
+        AC: importing the real export produces the correct product/variant
+        counts; running the same file twice in `--apply` mode does not
+        duplicate rows (idempotent on `slug`/`sku`).
+        🚦 HUMAN GATE — confirm the parsed catalog before the first
+        `--apply` run against a non-empty database; this repo has no real
+        Shopify export file yet, so that gate cannot be cleared until the
+        owner supplies one.
 
 ---
 
