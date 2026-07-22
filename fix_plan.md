@@ -111,7 +111,7 @@ is demonstrably true and `npm run verify` is green.
       and the whole `e2e` job, leaving `verify` (checkout, setup-node@20,
       `npm ci`, lint, typecheck, test:coverage, coverage-summary → step
       summary, upload coverage artifact, build) — i.e. exactly `npm run
-  verify` plus the artifact/summary steps, matching what the repo can
+verify` plus the artifact/summary steps, matching what the repo can
       actually run today.
       Added `tests/unit/ci-config.test.ts`: a regression test that parses
       `.github/workflows/ci.yml` for every `npm run <script>` reference and
@@ -132,12 +132,12 @@ is demonstrably true and `npm run verify` is green.
       Deps: 0.3. Husky (`9.1.7`) + lint-staged (`16.4.0` — v17 requires Node
       `>=22.22.1`, incompatible with this sandbox's Node 20.15; v16 needs
       `>=20.17`, close enough that it only warns, doesn't fail). `npx husky
-  init` created `.husky/pre-commit` and added `"prepare": "husky"` to
+init` created `.husky/pre-commit` and added `"prepare": "husky"` to
       `package.json` (runs on `npm install`, wires the git hooks path).
       Replaced the scaffolded default (`npm test`, which the task explicitly
       says NOT to run — full suite is too slow for a hook) with `npx
-  lint-staged`. Added a `"lint-staged"` block to `package.json`: `*.{js,
-  jsx,ts,tsx,mjs,cjs}` gets `eslint --fix` then `prettier --write`;
+lint-staged`. Added a `"lint-staged"` block to `package.json`: `*.{js,
+jsx,ts,tsx,mjs,cjs}` gets `eslint --fix` then `prettier --write`;
       `*.{json,md,css}` gets `prettier --write` only (ESLint's flat config
       doesn't lint those).
       `tests/unit/pre-commit-hook.test.ts` (4 cases, following the
@@ -170,8 +170,8 @@ is demonstrably true and `npm run verify` is green.
       the spec body which never actually defines a `customers` table despite
       the fix_plan bullet naming one — flagged, not guessed around, see the
       NOTE below) plus the `variant_stock` view (`SELECT variant_id,
-    coalesce(sum(delta),0)::int AS stock FROM inventory_movements GROUP BY
-    variant_id` — a plain, not materialized, view so it's always fresh with
+  coalesce(sum(delta),0)::int AS stock FROM inventory_movements GROUP BY
+  variant_id` — a plain, not materialized, view so it's always fresh with
       no trigger to keep in sync). `src/lib/db/client.ts` — drizzle
       singleton over `pg.Pool`, using `env.DATABASE_URL`.
       Installed `drizzle-orm`, `drizzle-kit`, `pg`, `@types/pg`. `tsx` was
@@ -239,9 +239,44 @@ is demonstrably true and `npm run verify` is green.
       `customers` table (e.g. for repeat-customer history or accounts) is
       wanted, that needs a spec update first, not a schema guess.
 
-- [ ] **1.2 Local dev database**
-      Deps: 1.1. `docker-compose.yml` with Postgres 16 + a `db:reset` script.
-      AC: `npm run db:reset` gives a fresh migrated empty database in <10s.
+- [x] **1.2 Local dev database**
+      Deps: 1.1. `docker-compose.yml` — single `postgres:16-alpine` service,
+      `POSTGRES_USER=user`/`POSTGRES_PASSWORD=pass`/`POSTGRES_DB=fhc` to match
+      `.env.example`'s `DATABASE_URL`, port `5432:5432`, named volume
+      (`fhc_postgres_data`) so data survives `docker compose down` (not `-v`),
+      healthcheck via `pg_isready`.
+      `scripts/db-reset.mjs` — new CLI script alongside `db-migrate.mjs`
+      (same rationale: outside `src/lib`, outside the coverage gate, no logic
+      beyond gluing `pg`+drizzle calls together). Connects to the `postgres`
+      admin database (derived from `DATABASE_URL` by swapping the path),
+      terminates other backends on the target db, `DROP DATABASE IF EXISTS` +
+      `CREATE DATABASE`, then runs the same `migrate()` call as
+      `db-migrate.mjs`. Added `"db:reset": "node scripts/db-reset.mjs"`.
+      `tests/unit/docker-compose.test.ts` (2 tests, `ci-config.test.ts`
+      pattern — regex assertions against the real files, not a YAML parser
+      dependency): `docker-compose.yml` exists and its image/port/env vars
+      match `.env.example`'s `DATABASE_URL`; `package.json`'s `db:reset`
+      script points at a script file that actually exists. Confirmed both
+      fail for the right reason (file/script missing) before implementing.
+      AC met, verified live: `docker compose up -d postgres`, waited for
+      the healthcheck, ran `npm run db:reset` twice in a row — ~1.1s each
+      time (well under 10s), first run produced all 15 tables + view
+      empty, second run (against an already-migrated db) was equally fast
+      and left it empty again. Also ran the full `npm run verify` gate
+      against the running container: 33 tests, 100% coverage, build green.
+      `docker compose down` afterward to leave no container running between
+      iterations; the named volume persists (by design — `down` without
+      `-v`) so the next `docker compose up` starts from where this one left
+      off rather than a surprise empty volume.
+      NOTE: this sandbox has a working `docker`/`docker compose` CLI
+      (v29.6.2) — 1.1's NOTE about proving migrations "by hand" with an ad
+      hoc container is now superseded; use `docker compose up -d postgres`
+      going forward instead of a bare `docker run`.
+      NOTE: CI's `postgres` service (added in 1.1, `.github/workflows/ci.yml`)
+      is independent of this compose file — it uses different credentials
+      (`postgres`/`postgres`/`fhc_test`) and is provisioned directly by
+      GitHub Actions' `services:` block, not docker-compose. No change needed
+      there; `docker-compose.yml` is local-dev-only per `specs/08-deploy-ops.md`.
 
 - [ ] **1.3 Repository layer**
       Deps: 1.1. `src/lib/repos/*` — the only modules that import Drizzle.

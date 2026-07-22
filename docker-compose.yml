@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: fhc
+    ports:
+      - "5432:5432"
+    volumes:
+      - fhc_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d fhc"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  fhc_postgres_data:
