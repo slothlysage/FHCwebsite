@@ -315,12 +315,31 @@ variant_id` — a plain, not materialized, view so it's always fresh with
         the same pattern will be needed for any other table with an
         `updated_at` column.
 
-  - [ ] **1.3b Variants repo**
-        Deps: 1.3a. `src/lib/repos/variants.ts` — create, getById,
-        listByProductId, update, deactivate (`isActive = false`, no hard
-        delete — variants are referenced by `order_items`).
-        AC: integration tests per function; a deactivated variant is excluded
-        from any "active variants for product" query.
+  - [x] **1.3b Variants repo**
+        Deps: 1.3a. `src/lib/repos/variants.ts` — createVariant, getVariantById,
+        listVariantsByProductId (all variants, active or not — used by admin),
+        listActiveVariantsByProductId (storefront-facing, filters
+        `isActive = true` in SQL), updateVariant, deactivateVariant
+        (`isActive = false`, no hard delete — variants are referenced by
+        `order_items`). Mirrors `products.ts`'s shape exactly (typed
+        `$inferSelect`/`$inferInsert`, `returning()` after
+        insert/update, `[x]!` non-null assertion on the single-row insert
+        result).
+        `src/lib/repos/variants.test.ts` — 7 integration tests against the
+        real dev database (create, getById found/not-found, list all for a
+        product, active-only list excludes a deactivated variant, update,
+        deactivate keeps the row retrievable with `isActive: false`).
+        AC met: 100% statement/branch/function/line coverage on the repo
+        module alone; full `npm run verify` green (9 files, 49 tests, 100%
+        global coverage, build passes). Confirmed the test file fails for the
+        right reason (import resolution error, module doesn't exist) before
+        writing `variants.ts`.
+        NOTE: unlike `products`, `product_variants` has no `updated_at`
+        column in the schema (see `specs/02-data-model.md`'s field list), so
+        `updateVariant`/`deactivateVariant` do NOT stamp a timestamp the way
+        1.3a's NOTE for products does — don't copy that pattern here by
+        reflex for 1.3c/1.3d without checking each table's actual columns
+        first.
 
   - [ ] **1.3c Inventory repo**
         Deps: 1.3b. `src/lib/repos/inventory.ts` — recordMovement (insert into
