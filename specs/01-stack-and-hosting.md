@@ -104,6 +104,16 @@ future page stops needing `env` at that layer, the validation needs a new
 forced import site (or an explicit call in `instrumentation.ts`) or it'll
 silently stop running at build time.
 
+## Scaffolding notes (0.6)
+
+`lint-staged@17` requires Node `>=22.22.1`; this sandbox runs Node 20.15.0, so
+installing it prints a hard EBADENGINE warning but the package still installs
+(npm doesn't block on it, only warns). Pinned to `lint-staged@16.4.0` instead
+(`engines.node: >=20.17`) — close enough to this sandbox's 20.15 that the
+warning is minor, and it avoids running a tool whose engine requirement
+outright excludes the current Node line. Revisit the pin when the sandbox
+Node version moves to 22.x.
+
 ## Alternative if the agent struggles with the Cloudflare adapter
 
 `@opennextjs/cloudflare` is less mature than Vercel's first-party path and some

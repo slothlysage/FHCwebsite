@@ -111,7 +111,7 @@ is demonstrably true and `npm run verify` is green.
       and the whole `e2e` job, leaving `verify` (checkout, setup-node@20,
       `npm ci`, lint, typecheck, test:coverage, coverage-summary → step
       summary, upload coverage artifact, build) — i.e. exactly `npm run
-      verify` plus the artifact/summary steps, matching what the repo can
+    verify` plus the artifact/summary steps, matching what the repo can
       actually run today.
       Added `tests/unit/ci-config.test.ts`: a regression test that parses
       `.github/workflows/ci.yml` for every `npm run <script>` reference and
@@ -128,9 +128,36 @@ is demonstrably true and `npm run verify` is green.
       (or a new job) and a `test:e2e` job respectively — the guard test above
       will pass automatically once the corresponding npm script exists.
 
-- [ ] **0.6 Pre-commit hook**
-      Deps: 0.3. Husky + lint-staged: format and lint staged files only.
-      AC: committing a file with a lint error is blocked locally.
+- [x] **0.6 Pre-commit hook**
+      Deps: 0.3. Husky (`9.1.7`) + lint-staged (`16.4.0` — v17 requires Node
+      `>=22.22.1`, incompatible with this sandbox's Node 20.15; v16 needs
+      `>=20.17`, close enough that it only warns, doesn't fail). `npx husky
+    init` created `.husky/pre-commit` and added `"prepare": "husky"` to
+      `package.json` (runs on `npm install`, wires the git hooks path).
+      Replaced the scaffolded default (`npm test`, which the task explicitly
+      says NOT to run — full suite is too slow for a hook) with `npx
+    lint-staged`. Added a `"lint-staged"` block to `package.json`: `*.{js,
+    jsx,ts,tsx,mjs,cjs}` gets `eslint --fix` then `prettier --write`;
+      `*.{json,md,css}` gets `prettier --write` only (ESLint's flat config
+      doesn't lint those).
+      `tests/unit/pre-commit-hook.test.ts` (4 cases, following the
+      `ci-config.test.ts` pattern of asserting against real repo files
+      rather than mocking): hook file contains `lint-staged` not the full
+      test command, hook file is executable (checks the POSIX exec bits via
+      `statSync(...).mode & 0o111`), `package.json` has a `lint-staged`
+      config whose commands include both `eslint` and `prettier`, and
+      `prepare` script is exactly `"husky"`.
+      AC met — verified live, not just via the unit test: staged a scratch
+      file with `const bad = (x:any) => {...}` and ran `git commit`; husky's
+      pre-commit hook ran `lint-staged`, `eslint --fix` failed on
+      `@typescript-eslint/no-explicit-any`, lint-staged reverted the stash
+      and aborted, and `git commit` exited 1 — nothing was committed. Removed
+      the scratch file afterward.
+      NOTE: lint-staged's revert-on-failure flow uses `git stash` internally
+      as a backup — if a hook run is killed mid-flight (e.g. `kill -9`) a
+      stray stash entry can be left behind. Not hit in this iteration, just
+      worth knowing if `git stash list` ever shows an unexpected entry after
+      a bad commit attempt.
 
 ---
 

@@ -12,7 +12,17 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "verify": "npm run lint && npm run typecheck && npm run test:coverage && npm run build"
+    "verify": "npm run lint && npm run typecheck && npm run test:coverage && npm run build",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{js,jsx,ts,tsx,mjs,cjs}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,css}": [
+      "prettier --write"
+    ]
   },
   "dependencies": {
     "next": "16.2.11",
@@ -33,7 +43,9 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.11",
     "eslint-config-prettier": "^10.1.8",
+    "husky": "^9.1.7",
     "jsdom": "^26.1.0",
+    "lint-staged": "^16.4.0",
     "prettier": "^3.9.6",
     "tailwindcss": "^4",
     "typescript": "^5",
