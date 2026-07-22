@@ -341,12 +341,28 @@ variant_id` — a plain, not materialized, view so it's always fresh with
         reflex for 1.3c/1.3d without checking each table's actual columns
         first.
 
-  - [ ] **1.3c Inventory repo**
+  - [x] **1.3c Inventory repo**
         Deps: 1.3b. `src/lib/repos/inventory.ts` — recordMovement (insert into
         `inventory_movements`), getStockForVariant (reads `variant_stock`
         view, returns 0 for a variant with no rows per `specs/02-data-model.md`),
-        getStockForVariants (batch, for a listing page).
-        AC: integration tests per function, including the zero-movements case.
+        getStockForVariants (batch, for a listing page — pre-seeds every
+        requested id with 0 in the returned `Map` before merging in the
+        view's rows, so callers never have to special-case a missing key
+        for "no movements yet" the way they would with the raw view).
+        `src/lib/repos/inventory.test.ts` — 5 integration tests against the
+        real dev database (record a movement, sum of positive+negative
+        deltas via `getStockForVariant`, zero-movements variant reads as 0,
+        batch lookup across three variants including one with zero
+        movements, empty-array batch returns an empty `Map`). Confirmed red
+        first (import resolution error, module doesn't exist) before writing
+        `inventory.ts`.
+        AC met: 100% statement/branch/function/line coverage on the repo
+        module alone; full `npm run verify` green (10 files, 54 tests, 100%
+        global coverage, build passes).
+        NOTE: `getStockForVariants` guards the empty-array case explicitly —
+        drizzle's `inArray(col, [])` compiles to `IN ()`, which Postgres
+        rejects as invalid syntax. Any future batch-lookup repo function
+        built on `inArray` needs the same empty-input guard.
 
   - [ ] **1.3d Orders repo**
         Deps: 1.3b. `src/lib/repos/orders.ts` — create (order + order_items in

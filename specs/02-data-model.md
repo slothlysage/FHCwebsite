@@ -130,3 +130,17 @@ inventory_movements GROUP BY variant_id`. A plain view recomputes on every
 - `orders.order_number` is a Drizzle `serial` (its own Postgres sequence),
   deliberately not derived from any other table's row count, so it can't
   leak insert-order information about anything else.
+
+## Implementation notes (1.3c — inventory repo)
+
+- `src/lib/repos/inventory.ts`'s `getStockForVariants` (batch stock lookup)
+  pre-seeds a `Map` with `0` for every requested variant id, then overwrites
+  entries from `variant_stock`'s rows. Callers get a value for every id they
+  asked for, never a missing key — the "zero rows = zero stock" rule from
+  above is handled once in the repo, not by every caller re-deriving it from
+  `variant_stock`'s inner-join-shaped `GROUP BY`.
+- Drizzle's `inArray(col, ids)` compiles to `col IN (...)`; called with an
+  empty array it compiles to `IN ()`, which Postgres rejects as a syntax
+  error. `getStockForVariants` special-cases `ids.length === 0` and returns
+  an empty `Map` without querying. Any future batch-lookup function built on
+  `inArray` (e.g. an orders or variants batch fetch) needs the same guard.
