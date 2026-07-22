@@ -10,7 +10,7 @@ is demonstrably true and `npm run verify` is green.
 
 ## Phase 0 — Foundation
 
-- [ ] **0.1 Scaffold Next.js app**
+- [x] **0.1 Scaffold Next.js app**
   Deps: none.
   Next.js App Router + TypeScript `strict`, Tailwind, path alias `@/*`.
   AC: `npm run dev` serves a page; `npm run build` succeeds; `tsconfig.json` has
@@ -23,6 +23,11 @@ is demonstrably true and `npm run verify` is green.
   Add one trivial passing test to prove the harness runs.
   AC: `npm run test:coverage` fails the build when a threshold is unmet
   (verify by temporarily adding an uncovered file, then remove it).
+  NOTE: `vitest.config.ts` and a coverage-gated CI workflow already exist
+  (created by an earlier iteration ahead of schedule). `tsconfig.json`
+  currently excludes `vitest.config.ts` and `tests/` from typecheck because
+  `vitest` isn't installed yet — installing it as part of 0.2 and removing
+  those two exclude entries is part of this task's AC.
 
 - [ ] **0.3 Lint, format, and the `verify` script**
   Deps: 0.2.

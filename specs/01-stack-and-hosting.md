@@ -37,6 +37,23 @@ Expected: **$0–5/month** plus Stripe fees.
 If cold starts on the free Neon tier prove unacceptable, the cheapest fix is a
 $5/mo Postgres on Railway or Fly, not a bigger web host.
 
+## Scaffolding notes (0.1)
+
+- `npx create-next-app@latest .` refuses to run because `create-next-app`
+  rejects package names with capital letters, and it derives the name from the
+  target directory (`FHCwebsite`). Workaround: scaffold into a throwaway temp
+  directory with a lowercase name, then copy the generated files in and fix
+  `package.json`'s `name` field by hand. Don't rename the repo directory to
+  work around this.
+- Scaffolded with Next.js 16.2.11 / React 19.2.4 / Tailwind 4 (`@tailwindcss/postcss`,
+  no `tailwind.config.*` file — v4 configures via `@theme` in `globals.css`).
+- `next build` type-checks every `.ts`/`.tsx` file reachable from
+  `tsconfig.json`'s `include`, not just app code. `vitest.config.ts` (added
+  ahead of schedule by task 0.2's prep work) breaks the build until `vitest`
+  is an installed dependency, so it and `tests/` are temporarily listed in
+  `tsconfig.json`'s `exclude`. Remove both exclude entries once 0.2 installs
+  vitest.
+
 ## Alternative if the agent struggles with the Cloudflare adapter
 
 `@opennextjs/cloudflare` is less mature than Vercel's first-party path and some
