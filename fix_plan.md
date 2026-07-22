@@ -98,11 +98,35 @@ is demonstrably true and `npm run verify` is green.
       required in `serverSchema` at that point, not before — an unused
       required var would fail `npm run build` for no functional reason.
 
-- [ ] **0.5 CI pipeline**
+- [x] **0.5 CI pipeline**
       Deps: 0.3.
-      `.github/workflows/ci.yml`: node 20, `npm ci`, `npm run verify`, upload
-      coverage summary as a job artifact and print it to the step summary.
-      AC: CI is red on a deliberately broken commit and green on `main`.
+      `.github/workflows/ci.yml` already existed (from an earlier iteration,
+      commit 801d4e6) but was broken: it ran `npm run db:migrate` (no such
+      script — Postgres/Drizzle isn't wired up until 1.1) and had a second
+      `e2e` job running `npm run test:e2e` (no such script — Playwright isn't
+      installed until 5.5). Either would fail on a fresh clone of `main` right
+      now, so the AC ("green on main") wasn't actually met despite the file
+      existing and the checklist being unticked.
+      Fix: removed the `postgres` service, the `Migrate test database` step,
+      and the whole `e2e` job, leaving `verify` (checkout, setup-node@20,
+      `npm ci`, lint, typecheck, test:coverage, coverage-summary → step
+      summary, upload coverage artifact, build) — i.e. exactly `npm run
+      verify` plus the artifact/summary steps, matching what the repo can
+      actually run today.
+      Added `tests/unit/ci-config.test.ts`: a regression test that parses
+      `.github/workflows/ci.yml` for every `npm run <script>` reference and
+      asserts each exists in `package.json`'s `scripts`. This is what caught
+      the bug (failed listing `db:migrate`/`test:e2e` as missing before the
+      fix) and will catch it again if a future phase's CI step is added
+      before its npm script lands.
+      AC met: confirmed red by renaming the lint step's script to `lintxyz`
+      (test failed, listing exactly that name as missing) and green again
+      after reverting. `npm run verify` passes locally (lint, typecheck,
+      test:coverage — 3 files/7 tests, 100%, build).
+      NOTE for 1.1 and 5.5: when the DB schema and Playwright suite land,
+      re-add the `postgres` service + `db:migrate` step to the `verify` job
+      (or a new job) and a `test:e2e` job respectively — the guard test above
+      will pass automatically once the corresponding npm script exists.
 
 - [ ] **0.6 Pre-commit hook**
       Deps: 0.3. Husky + lint-staged: format and lint staged files only.
