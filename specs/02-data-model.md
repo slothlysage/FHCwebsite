@@ -104,3 +104,29 @@ created_at` — append-only.
 - `product_attributes (key, value)`
 - `orders (created_at desc)`, `orders (status)`, `orders (email)`
 - `inventory_movements (variant_id)`
+
+## Implementation notes (1.1)
+
+- No standalone `customers` table exists, despite the fix_plan's task bullet
+  naming one — this spec never defined one, and `orders.email` +
+  `addresses` cover v1. If repeat-customer accounts are needed later, add a
+  `customers` table to this spec first, then migrate; don't let a future
+  iteration infer one from the fix_plan wording alone.
+- `variant_stock` (the "stock is `SUM(delta)`" requirement) is implemented
+  as a plain Postgres view (`drizzle-orm`'s `pgView`), not a materialized
+  view: `SELECT variant_id, coalesce(sum(delta), 0)::int AS stock FROM
+inventory_movements GROUP BY variant_id`. A plain view recomputes on every
+  read, so it's always correct with nothing to refresh — stronger than a
+  materialized view for this size of table. The `::int` cast matters:
+  Postgres' `sum(integer)` is `bigint`, and `pg`/node-postgres returns
+  `bigint` columns as strings to avoid silent precision loss, which the
+  view's consumers don't expect from a value called `stock`.
+- A variant with zero inventory movements has **no row** in `variant_stock`
+  (an inner-join-shaped `GROUP BY`, not `LEFT JOIN`) — treat a missing row as
+  zero stock, don't treat it as "not found."
+- `discount_codes.code` case-insensitivity is a `uniqueIndex` on
+  `lower(code)`, not a `citext` column — avoids the extension dependency;
+  application code must still compare/normalize with `lower()`.
+- `orders.order_number` is a Drizzle `serial` (its own Postgres sequence),
+  deliberately not derived from any other table's row count, so it can't
+  leak insert-order information about anything else.

@@ -13,6 +13,21 @@ jobs:
   verify:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fhc_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/fhc_test
       STRIPE_SECRET_KEY: sk_test_dummy
@@ -36,6 +51,9 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Migrate test database
+        run: npm run db:migrate
 
       - name: Test with coverage
         run: npm run test:coverage
