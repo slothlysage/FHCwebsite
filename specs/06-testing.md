@@ -30,6 +30,13 @@ wherever possible. Fast, no database.
 with a test database, webhook handlers with signed payloads. Each test runs in a
 transaction that is rolled back.
 
+Running integration tests locally requires `.env.local`'s vars in `process.env`
+first — neither `vitest.config.mts` nor any npm script loads `.env.local`
+automatically (CI works because `ci.yml` sets the vars directly in its `env:`
+block). Locally: `set -a; source .env.local; set +a` before `vitest run` /
+`npm run test:coverage`, with `docker compose up -d postgres` (and a migrated
+database — see `db:migrate`/`db:reset` in `AGENT.md`) already running.
+
 **Component** — RTL. Assert behavior and accessible output, not implementation.
 Query by role and label, never by test id unless there is no alternative.
 

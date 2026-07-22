@@ -170,8 +170,8 @@ jsx,ts,tsx,mjs,cjs}` gets `eslint --fix` then `prettier --write`;
       the spec body which never actually defines a `customers` table despite
       the fix_plan bullet naming one — flagged, not guessed around, see the
       NOTE below) plus the `variant_stock` view (`SELECT variant_id,
-  coalesce(sum(delta),0)::int AS stock FROM inventory_movements GROUP BY
-  variant_id` — a plain, not materialized, view so it's always fresh with
+coalesce(sum(delta),0)::int AS stock FROM inventory_movements GROUP BY
+variant_id` — a plain, not materialized, view so it's always fresh with
       no trigger to keep in sync). `src/lib/db/client.ts` — drizzle
       singleton over `pg.Pool`, using `env.DATABASE_URL`.
       Installed `drizzle-orm`, `drizzle-kit`, `pg`, `@types/pg`. `tsx` was
@@ -283,6 +283,59 @@ jsx,ts,tsx,mjs,cjs}` gets `eslint --fix` then `prettier --write`;
       Typed CRUD for products, variants, orders, inventory.
       AC: every repo function has an integration test against the dev database.
       Repos ≥85% covered.
+      Split into sub-tasks below (one repo module is a full task on its own —
+      each needs its own integration-test file against the real dev database).
+      This umbrella item is ticked `[x]` only once all four below are `[x]`.
+
+  - [x] **1.3a Products repo**
+        Deps: 1.1. `src/lib/repos/products.ts` — createProduct, getProductById,
+        getProductBySlug, listProducts (optional `{status?, includeDeleted?}`,
+        excludes soft-deleted by default), updateProduct, softDeleteProduct
+        (sets `deletedAt` + `updatedAt`, does not hard-delete).
+        `src/lib/repos/products.test.ts` — 9 integration tests against the
+        real dev database (create default-draft, getById found/not-found,
+        getBySlug, list filtered by status excluding soft-deleted, list with
+        no filter across statuses, list with `includeDeleted: true`, update,
+        soft-delete keeps the row retrievable by id with `deletedAt` set).
+        AC met: 100% statement/branch/function/line coverage on
+        `products.ts` alone; full `npm run verify` green (42 tests, 100%
+        global coverage, build passes).
+        NOTE — env vars for local test runs: neither `vitest.config.mts` nor
+        any npm script loads `.env.local` into `process.env` (confirmed by
+        running `schema.test.ts` cold — it fails the same env-parse error
+        this task's test did until `.env.local` is exported by hand). CI works
+        because `ci.yml` sets the vars directly in the `env:` block. Local
+        runs against the dev database need
+        `set -a; source .env.local; set +a` (or equivalent) before
+        `vitest`/`npm run test:coverage`. Future repo-layer iterations (1.3b–d)
+        hit this same wall — this note is here so they don't re-discover it.
+        NOTE for 1.3b: `softDeleteProduct`/`updateProduct` both stamp
+        `updatedAt: new Date()` explicitly rather than relying on the
+        column's `defaultNow()` (which only fires on insert, not update) —
+        the same pattern will be needed for any other table with an
+        `updated_at` column.
+
+  - [ ] **1.3b Variants repo**
+        Deps: 1.3a. `src/lib/repos/variants.ts` — create, getById,
+        listByProductId, update, deactivate (`isActive = false`, no hard
+        delete — variants are referenced by `order_items`).
+        AC: integration tests per function; a deactivated variant is excluded
+        from any "active variants for product" query.
+
+  - [ ] **1.3c Inventory repo**
+        Deps: 1.3b. `src/lib/repos/inventory.ts` — recordMovement (insert into
+        `inventory_movements`), getStockForVariant (reads `variant_stock`
+        view, returns 0 for a variant with no rows per `specs/02-data-model.md`),
+        getStockForVariants (batch, for a listing page).
+        AC: integration tests per function, including the zero-movements case.
+
+  - [ ] **1.3d Orders repo**
+        Deps: 1.3b. `src/lib/repos/orders.ts` — create (order + order_items in
+        one transaction), getById, getByStripeSessionId, listByStatus, update
+        (status transitions, `paidAt`/`fulfilledAt`).
+        AC: integration tests per function; creating an order with items is
+        atomic (a failure partway through leaves no partial rows — this is
+        also required later by 3.5, so get the transaction shape right now).
 
 - [ ] **1.4 Seed + CSV catalog importer**
       Deps: 1.3. Importer reads the Shopify product CSV export into the schema —
