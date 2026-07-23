@@ -10,6 +10,7 @@ import {
   getOrderById,
   getOrderByStripePaymentIntentId,
   getOrderByStripeSessionId,
+  getOrderItemsByOrderId,
   listOrdersByStatus,
   updateOrder,
 } from "@/lib/repos/orders";
@@ -184,6 +185,35 @@ describe("orders repo", () => {
 
     expect(paidIds).toContain(paidOrder.id);
     expect(paidIds).not.toContain(pending.id);
+  });
+
+  it("gets order items by order id", async () => {
+    const stripeSessionId = `cs_test_${randomUUID()}`;
+    const order = await createOrder(baseOrder(stripeSessionId), [
+      {
+        variantId: null,
+        productNameSnapshot: "Lavender Candle",
+        variantNameSnapshot: "8oz",
+        skuSnapshot: "LAV-8OZ",
+        unitPriceCents: 2000,
+        quantity: 1,
+        lineTotalCents: 2000,
+      },
+    ]);
+    insertedOrderIds.push(order.id);
+
+    const items = await getOrderItemsByOrderId(order.id);
+    expect(items).toHaveLength(1);
+    expect(items[0]?.skuSnapshot).toBe("LAV-8OZ");
+  });
+
+  it("returns an empty array for an order with no items", async () => {
+    const stripeSessionId = `cs_test_${randomUUID()}`;
+    const order = await createOrder(baseOrder(stripeSessionId), []);
+    insertedOrderIds.push(order.id);
+
+    const items = await getOrderItemsByOrderId(order.id);
+    expect(items).toEqual([]);
   });
 
   it("updates order status and timestamps", async () => {

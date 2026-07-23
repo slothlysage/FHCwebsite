@@ -609,3 +609,62 @@ exactly one order `"needs_attention"` and one `"paid"`, the two items'
 2 sold). Confirmed both new tests fail for the right reason (both orders
 `"paid"`, `oversoldQuantity` always 0) against the pre-3.6 code before
 implementing the lock + recheck.
+
+## Implementation notes (3.7)
+
+**Success page reads, never writes.** `src/app/(storefront)/checkout/
+success/page.tsx` looks up the order by `?session_id=` via the existing
+`getOrderByStripeSessionId` — never by order id, so the URL never carries an
+enumerable identifier. A missing order (webhook hasn't landed yet, or a bad
+id) renders a "finishing up" message, not a 404/error — that race is
+expected, not exceptional. Because the page has no write path at all, "a
+refresh doesn't duplicate anything" holds by construction; there is nothing
+to make idempotent.
+
+**Receipt building is pure; sending is a thin, best-effort wrapper.**
+`src/lib/services/receipt.ts`'s `buildOrderReceiptEmail(order, items)` takes
+plain data and returns `{subject, html, text}` — no db/network access, kept
+in `services/` for the 90% coverage floor since it's rendering money amounts.
+`src/lib/email/send.ts`'s `sendEmail` is the only thing that talks to Resend,
+and is written so it cannot throw: both the SDK's own `{error}` result and a
+thrown exception are caught and turned into `{sent: boolean}`. Combined with
+`order-fulfillment.ts` sending the receipt _after_ `withTransaction(...)`
+resolves (never inside it), a failed or slow email can never roll back or
+delay the paid order — matching this section's "Email is sent after commit;
+a failed email must never roll back a paid order" both by ordering and by
+the send path being unable to throw.
+
+**Resend's fetch-binding differs from Stripe's, in tests' favor.** Stripe's
+SDK (`src/lib/stripe/client.ts`) binds a fetch-based HTTP client at
+construction time, which is why its msw-mocked tests (3.2b, 3.3) have to
+import the module dynamically _after_ `stripeServer.listen()` — a static
+import would construct the client, and thus capture `fetch`, too early.
+Resend's SDK (confirmed by reading `node_modules/resend/dist/index.mjs`)
+instead calls the bare global `fetch` inline inside `fetchRequest`, per
+request, with no reference captured earlier — so `src/lib/email/client.ts`'s
+singleton can be imported statically everywhere, tests included, with no
+extra ceremony. Do not copy the dynamic-import workaround here; it isn't
+needed and would just be dead complexity.
+
+**Resend's SDK already catches network failures itself.** `fetchRequest`
+wraps its own `fetch` call in a try/catch and returns `{error}` rather than
+throwing on a network-level failure — meaning `sendEmail`'s outer catch
+block (there for defense against a future SDK change, or a bug reading
+`resend`/`env` itself) is unreachable through any msw-simulable path. It
+shows as two uncovered lines in the coverage report; left in deliberately
+(same "belt and suspenders" reasoning as `order-fulfillment.ts`'s own
+try/catch around the whole receipt-send call) rather than deleted just to
+close the gap.
+
+**`RESEND_API_KEY`/`RESEND_FROM_EMAIL` promoted to required** in `env.ts`,
+per 0.4's own note to do this once the module they gate is actually built.
+`.env.local`/CI use placeholder values (`.env.local`'s
+`RESEND_FROM_EMAIL=onboarding@resend.dev` is Resend's real no-verification-
+needed sandbox sender, for local dev only) — see fix_plan.md's "Blocked —
+needs human" for the production sender-domain gap this leaves open.
+
+**Made-to-order note in the receipt.** Resolves 1.7's own NOTE ("order
+confirmation email should probably tell the customer the item is made to
+order"): any `order_items` row with `oversoldQuantity > 0` gets a
+"Made to order — this item ships once it's ready" line, in both the html and
+text bodies and on the success page itself.

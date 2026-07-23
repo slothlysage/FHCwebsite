@@ -15,9 +15,11 @@ import {
   lockVariantStock,
   recordMovement,
 } from "@/lib/repos/inventory";
-import { createOrder } from "@/lib/repos/orders";
+import { createOrder, getOrderItemsByOrderId } from "@/lib/repos/orders";
 import { withTransaction } from "@/lib/repos/transaction";
+import { sendEmail } from "@/lib/email/send";
 import { getCartSummary } from "@/lib/services/cart";
+import { buildOrderReceiptEmail } from "@/lib/services/receipt";
 
 export async function fulfillCheckoutSession(
   session: Stripe.Checkout.Session,
@@ -45,7 +47,7 @@ export async function fulfillCheckoutSession(
   // Money totals come from the Stripe session, not recomputed here — Stripe
   // is the source of truth for payment amounts (AGENT.md), including tax
   // and shipping, which automatic_tax/shipping_options compute Stripe-side.
-  await withTransaction(async (tx) => {
+  const order = await withTransaction(async (tx) => {
     // Oversell guard (specs/05-payments.md's "Oversell" section, task 3.6):
     // getCartSummary already re-checked stock once, at session-creation
     // read time — but that doesn't stop two different carts from each
@@ -133,5 +135,28 @@ export async function fulfillCheckoutSession(
     }
 
     await deleteCartItemsByCartId(cartId, tx);
+
+    return order;
   });
+
+  // Email is sent after commit — a send failure must never roll back a paid
+  // order (specs/05-payments.md's "Transactions" section). `sendEmail`
+  // itself never throws (src/lib/email/send.ts), but this still guards
+  // against a bug in receipt-building so that path can never take down an
+  // already-committed order either.
+  if (!order.email) {
+    console.error(
+      `[order-fulfillment] order ${order.id} (session ${session.id}): no email on file, skipping receipt`,
+    );
+    return;
+  }
+  try {
+    const items = await getOrderItemsByOrderId(order.id);
+    const receipt = buildOrderReceiptEmail(order, items);
+    await sendEmail({ to: order.email, ...receipt });
+  } catch (error) {
+    console.error(
+      `[order-fulfillment] order ${order.id} (session ${session.id}): receipt email failed: ${String(error)}`,
+    );
+  }
 }

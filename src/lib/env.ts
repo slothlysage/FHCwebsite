@@ -19,7 +19,11 @@ const serverSchema = z.object({
   R2_SECRET_ACCESS_KEY: z.string().min(1).optional(),
   R2_BUCKET: z.string().min(1).optional(),
   R2_PUBLIC_URL: z.string().url().optional(),
-  RESEND_API_KEY: z.string().min(1).optional(),
+  RESEND_API_KEY: z.string().min(1),
+  // "From" address for transactional email (order receipts, 3.7; owner
+  // notifications, 4.6/4.9). Must be on a domain verified with Resend before
+  // real sends succeed — see fix_plan.md's "Blocked — needs human".
+  RESEND_FROM_EMAIL: z.string().email(),
   SENTRY_DSN: z.string().url().optional(),
   SHIPPO_API_TOKEN: z.string().min(1).optional(),
 });

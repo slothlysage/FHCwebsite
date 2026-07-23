@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 
 import { eq } from "drizzle-orm";
 import {
+  afterAll,
   afterEach,
+  beforeAll,
   beforeEach,
   describe,
   expect,
@@ -28,11 +30,22 @@ import { getOrderByStripeSessionId } from "@/lib/repos/orders";
 import { createProduct } from "@/lib/repos/products";
 import { createVariant } from "@/lib/repos/variants";
 import { fulfillCheckoutSession } from "@/lib/services/order-fulfillment";
+import {
+  getSentEmails,
+  resendServer,
+  resetResendFakeState,
+  setResendForceFailure,
+} from "../../../tests/msw/resend-server";
 
 // Integration tests against the real dev database (specs/06-testing.md). No
 // Stripe network call is involved — `fulfillCheckoutSession` only reads the
 // plain `Stripe.Checkout.Session` object it's handed, so a hand-built fake
-// (cast, not fetched) is enough; no msw server needed here.
+// (cast, not fetched) is enough. Resend *is* a real network call (the 3.7
+// receipt email), intercepted at the boundary via msw — see
+// tests/msw/resend-server.ts.
+
+beforeAll(() => resendServer.listen({ onUnhandledRequest: "error" }));
+afterAll(() => resendServer.close());
 
 describe("fulfillCheckoutSession", () => {
   const insertedProductIds: string[] = [];
@@ -47,6 +60,8 @@ describe("fulfillCheckoutSession", () => {
 
   afterEach(async () => {
     errorSpy.mockRestore();
+    resendServer.resetHandlers();
+    resetResendFakeState();
     for (const stripeSessionId of insertedOrderStripeSessionIds.splice(0)) {
       const order = await getOrderByStripeSessionId(stripeSessionId);
       if (order) {
@@ -160,6 +175,36 @@ describe("fulfillCheckoutSession", () => {
       .from(cartItems)
       .where(eq(cartItems.cartId, cart.id));
     expect(remainingCartItems).toEqual([]);
+  });
+
+  it("sends a receipt email after fulfilling the order", async () => {
+    const { cart } = await makeCartWithStock(10);
+    const sessionId = `cs_test_${randomUUID()}`;
+    insertedOrderStripeSessionIds.push(sessionId);
+
+    await fulfillCheckoutSession(
+      fakeSession({ id: sessionId, metadata: { cart_id: cart.id } }),
+    );
+
+    const order = await getOrderByStripeSessionId(sessionId);
+    const [sent] = getSentEmails();
+    expect(sent?.to).toEqual(["buyer@example.com"]);
+    expect(sent?.subject).toContain(`#${order?.orderNumber}`);
+  });
+
+  it("still creates the order when the receipt email fails to send", async () => {
+    setResendForceFailure(true);
+    const { cart } = await makeCartWithStock(10);
+    const sessionId = `cs_test_${randomUUID()}`;
+    insertedOrderStripeSessionIds.push(sessionId);
+
+    await fulfillCheckoutSession(
+      fakeSession({ id: sessionId, metadata: { cart_id: cart.id } }),
+    );
+
+    const order = await getOrderByStripeSessionId(sessionId);
+    expect(order?.status).toBe("paid");
+    expect(getSentEmails()).toEqual([]);
   });
 
   it("does nothing when the session has no cart_id metadata", async () => {

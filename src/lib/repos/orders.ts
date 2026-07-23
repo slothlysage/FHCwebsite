@@ -62,6 +62,12 @@ export async function getOrderByStripePaymentIntentId(
   return order;
 }
 
+export async function getOrderItemsByOrderId(
+  orderId: string,
+): Promise<Array<typeof orderItems.$inferSelect>> {
+  return db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+}
+
 export async function listOrdersByStatus(
   status: OrderStatus,
 ): Promise<Order[]> {

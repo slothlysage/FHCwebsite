@@ -2148,7 +2148,7 @@ transaction.ts`, from 1.4b) — 3.4 had these as four independent writes;
       often can make one more"). Followed the spec over this bullet's own
       looser "refunded/flagged" phrasing.
       New `src/lib/repos/inventory.ts` function `lockVariantStock(variantId,
-  executor)` — a `pg_advisory_xact_lock` keyed on the variant id,
+executor)` — a `pg_advisory_xact_lock` keyed on the variant id,
       transaction-scoped (auto-released at commit/rollback, no unlock call).
       `variant_stock` is an aggregate view, so `SELECT ... FOR UPDATE` isn't
       available; the advisory lock is the substitute. `order-fulfillment.ts`'s
@@ -2158,7 +2158,7 @@ transaction.ts`, from 1.4b) — 3.4 had these as four independent writes;
       `oversoldQuantity = max(0, quantity - stock)` — written to
       `order_items.oversoldQuantity` (schema column existed since 1.7, never
       actually computed until now). A backorder-allowed (`allowBackorder:
-  true`) variant being oversold is expected/legal (1.7) and does not flag
+true`) variant being oversold is expected/legal (1.7) and does not flag
       the order; only an oversold **non**-backorder variant sets the whole
       order's status to `needs_attention`. Inventory is still decremented by
       the full requested quantity either way — the guard changes the order's
@@ -2196,11 +2196,116 @@ transaction.ts`, from 1.4b) — 3.4 had these as four independent writes;
       works, added no new repo function since 1.3d's existing one is generic
       over status).
 
-- [ ] **3.7 Confirmation page + transactional email**
-      Deps: 3.5. Success page keyed by session id (not order id — don't leak an
-      enumerable identifier). Receipt email via Resend.
-      AC: refreshing the success page does not duplicate anything; email renders in
-      plain text as well as HTML; email sending failure does not fail the order.
+- [x] **3.7 Confirmation page + transactional email**
+      Deps: 3.5. `src/app/(storefront)/checkout/success/page.tsx` — async
+      Server Component, `export const dynamic = "force-dynamic"` (same
+      rationale as every other order/catalog-backed route). Reads
+      `?session_id=` (Stripe's `{CHECKOUT_SESSION_ID}`, already wired into
+      `success_url` since 3.3 — no checkout.ts change needed), looks up the
+      order via the existing `getOrderByStripeSessionId` (never by order id
+      — keeps the AC's "don't leak an enumerable identifier" true by
+      construction, since a sequential `orderNumber`/`id` is never read from
+      the URL). No order is not an error: the webhook can legitimately not
+      have landed yet when Stripe redirects the customer back, so a missing
+      order renders a polite "finishing up" message, not a 404/error state.
+      The page only _reads_ — there is no write path on it at all — which is
+      what makes "refreshing does not duplicate anything" true by
+      construction rather than by an idempotency check; a dedicated test
+      still renders it twice for the same session id and asserts the paid-
+      order count didn't move, matching this codebase's "prove it, don't
+      just assert intent" convention.
+      New `getOrderItemsByOrderId(orderId)` in `src/lib/repos/orders.ts` —
+      the reader task 1.3d's own NOTE said would be needed "before 3.5 or
+      4.6" (ended up needed here, feeding both this page and the receipt
+      email below).
+      New `src/lib/services/receipt.ts` — pure `buildOrderReceiptEmail(order,
+    items)` (90%-floor services module, no db/network), returns
+      `{subject, html, text}`. Escapes snapshot text fields before
+      interpolating into HTML (`escapeHtml`, hand-rolled — no templating
+      engine dependency justified for four field types). Per 1.7's own NOTE
+      ("order confirmation email should probably tell the customer the item
+      is made to order"), any line with `oversoldQuantity > 0` gets a
+      "Made to order — this item ships once it's ready" note in both
+      formats.
+      New `src/lib/email/` module (the "existing infrastructure" both
+      `specs/04-admin.md` and `specs/09-shipping.md` already cite as landing
+      with 3.7, for 4.6/4.9 owner notifications and Shippo label emails to
+      reuse): `client.ts` (a `Resend` singleton, mirroring `stripe/client.ts`'s
+      pattern) and `send.ts` — `sendEmail({to, subject, html, text})`, which
+      never throws (catches both the SDK's own `{error}` return and a thrown
+      exception, logs, returns `{sent: boolean}`). Installed `resend` as a
+      dependency.
+      `src/lib/services/order-fulfillment.ts`: the `withTransaction(...)`
+      callback now returns the created order; after the transaction commits,
+      `fulfillCheckoutSession` fetches its items via the new reader, builds
+      the receipt, and calls `sendEmail` — wrapped in its own try/catch (belt-
+      and-suspenders on top of `sendEmail`'s own internal one) so a bug in
+      receipt-building can never take down an already-committed, already-
+      paid order, satisfying specs/05-payments.md's "Transactions" section
+      ("Email is sent after commit; a failed email must never roll back a
+      paid order") both by placement (after commit) and by construction
+      (nothing on this path can throw out of the function). An order with no
+      email on file (a session with neither `customer_details.email` nor
+      `customer_email` — theoretically possible per 3.5's existing fallback
+      to `""`) skips sending and logs, rather than calling Resend with an
+      empty recipient.
+      `env.ts`: `RESEND_API_KEY` promoted from `.optional()` to required (per
+      0.4's own NOTE: "promote ... at that point" — this is that point), plus
+      a new required `RESEND_FROM_EMAIL`. `.env.example` gets both names
+      (blank); `.env.local`/CI's dummy env block get placeholder values
+      (`.env.local` also gets `onboarding@resend.dev`, Resend's own no-
+      verified-domain-needed sandbox sender, for local dev only — see the
+      new "Blocked" entry below for production).
+      `tests/msw/resend-server.ts` — a msw fake of `POST
+https://api.resend.com/emails`, mirroring `stripe-server.ts`'s pattern
+      and rationale exactly. One difference worth recording: Resend's SDK
+      (unlike Stripe's) reads the global `fetch` inline at request time, not
+      a reference bound at client-construction time (confirmed by reading
+      `node_modules/resend/dist/index.mjs`) — so `src/lib/email/client.ts`'s
+      singleton can be imported statically in tests with no
+      dynamic-import-after-`listen()` workaround, unlike `stripe/client.ts`'s.
+      Also discovered while writing `send.ts`'s tests: Resend's own
+      `fetchRequest` already wraps its `fetch` call in a try/catch and
+      returns `{error}` for a network failure rather than throwing — so
+      `sendEmail`'s outer catch block is unreachable through any msw-
+      simulable path and shows as two uncovered lines in the coverage
+      report. Left in deliberately (matching `order-fulfillment.ts`'s own
+      belt-and-suspenders try/catch above it) rather than deleted to chase
+      100%, since the global 80% floor and the `src/lib/services/**` 90%
+      floor (`receipt.ts`, `order-fulfillment.ts`) both clear easily without
+      it — AGENT.md's "do not chase coverage with tests that assert nothing"
+      cuts the other way here: a test that can't actually exercise a branch
+      isn't worth writing just to move a number.
+      Tests, all confirmed red first (missing module/function, or `import
+"./page"` resolution failure) before implementing: `receipt.test.ts` (7
+      pure unit cases — subject, item+totals rendering in both formats,
+      discount line presence/absence, made-to-order note on exactly the
+      oversold line, HTML-escaping); `send.test.ts` (3 msw-boundary cases —
+      success records the exact payload, an API error and a network failure
+      both resolve `{sent: false}` without throwing); 2 new `orders.test.ts`
+      cases (items found, empty array for a no-items order); `env.test.ts`
+      updated (`REQUIRED_ENV` gained both new keys; 1 new case, missing
+      `RESEND_API_KEY` throws naming it); `order-fulfillment.test.ts` gained
+      msw wiring (`resendServer.listen`/`resetHandlers`/`close`, mirroring
+      `checkout.test.ts`'s Stripe setup) plus 2 new cases (a receipt is sent
+      addressed to the buyer with the right order number in the subject; a
+      forced Resend failure still leaves the order `paid` and sends nothing);
+      new `checkout/success/page.test.tsx` (4 cases — known session renders
+      items/totals, unknown/missing session id both render the "finishing
+      up" message rather than an error, double-render doesn't change the
+      paid-order count).
+      AC met: `npm run verify` green — 52 files, 426 tests, 97.95%/93.56%/
+      100%/97.88% coverage (global 80% floor, services/stripe 90% floors all
+      clear), build passes with `/checkout/success` listed `ƒ` (dynamic) in
+      the route table, confirming the `force-dynamic` export took effect the
+      same way it did for 2.2/2.5/2.9's build-output check.
+      NOTE for 4.6/4.9 (owner notifications): `src/lib/email/send.ts` is the
+      generic wrapper to reuse for the in-app+email owner-notification
+      channel `specs/04-admin.md` already designed around it — do not write
+      a second Resend client.
+      NOTE for 3b.2/3b.5/3b.8 (booking/subscription confirmations): reuse
+      `sendEmail` the same way; a booking or subscription confirmation is
+      just a different `ReceiptEmail`-shaped builder, not a new send path.
 
 - [ ] **3.8 Discount codes**
       Deps: 3.3. Percentage and fixed-amount, expiry, usage cap, min-spend.
@@ -2506,6 +2611,13 @@ service_type_id }`.
 ## Blocked — needs human
 
 _(agent appends here; do not guess around a blocker)_
+
+- **`RESEND_FROM_EMAIL` needs a real, domain-verified sender before launch
+  (3.7).** Local dev/CI use `onboarding@resend.dev`, Resend's own sandbox
+  address that needs no domain verification — real order-receipt emails in
+  production need a Resend-verified domain (e.g. `orders@<realdomain>`) or
+  sends will fail. Same category as the brand-assets entry above: not
+  blocking to build against, blocking to actually send from once live.
 
 - Brand assets: logo, real color palette, product photography. 2.1 shipped
   with a placeholder warm-neutral/terracotta palette (`src/app/globals.css`)

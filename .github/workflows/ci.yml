@@ -35,6 +35,8 @@ jobs:
       NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: pk_test_dummy
       NEXT_PUBLIC_SITE_URL: http://localhost:3000
       ALLOW_LIVE: "false"
+      RESEND_API_KEY: re_dummy
+      RESEND_FROM_EMAIL: orders@example.com
 
     steps:
       - uses: actions/checkout@v4
