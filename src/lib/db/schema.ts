@@ -291,6 +291,51 @@ export const orderItems = pgTable("order_items", {
   oversoldQuantity: integer("oversold_quantity").notNull().default(0),
 });
 
+// Server-side cart (specs/03-storefront.md's "Cart" section), keyed by an
+// httpOnly cookie holding this row's id — never a client-held cart. No
+// price/name snapshot columns here on purpose: every read re-joins
+// product_variants for the current price, so a price change between
+// add-to-cart and checkout is reflected automatically, with nothing to keep
+// in sync.
+export const carts = pgTable("carts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const cartItems = pgTable(
+  "cart_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    cartId: uuid("cart_id")
+      .notNull()
+      .references(() => carts.id),
+    variantId: uuid("variant_id")
+      .notNull()
+      .references(() => productVariants.id),
+    quantity: integer("quantity").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // One row per (cart, variant) — adding an already-present variant again
+    // sets its quantity in place via onConflictDoUpdate, it never duplicates.
+    uniqueIndex("cart_items_cart_id_variant_id_idx").on(
+      table.cartId,
+      table.variantId,
+    ),
+    index("cart_items_cart_id_idx").on(table.cartId),
+  ],
+);
+
 export const sessions = pgTable("sessions", {
   id: uuid("id").primaryKey().defaultRandom(),
   adminUserId: uuid("admin_user_id")

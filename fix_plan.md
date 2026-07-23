@@ -1426,6 +1426,100 @@ opengraph-image-<hash>` (dynamic, depends on per-slug DB data).
       AC: a cart containing a product whose price later changes reflects the _new_
       price at checkout; removing the last item empties cleanly; quantity is clamped
       to available stock. Cart service ≥90% covered.
+      Split into sub-tasks below (schema/repo vs. business-logic vs. UI/cookie
+      wiring — same multi-piece shape as 1.3/1.4/2.6's splits). This umbrella
+      item is ticked `[x]` only once all three below are `[x]`.
+
+  - [x] **2.7a Cart schema + repo layer**
+        Deps: 2.5. No `carts`/`cart_items` tables existed anywhere in
+        `specs/02-data-model.md` before this task — added there first (new
+        "## carts / cart_items" section), then implemented exactly as
+        written. `carts` (id, created_at, updated_at) and `cart_items` (id,
+        cart_id → carts, variant_id → product_variants, quantity, created_at,
+        updated_at), unique on `(cart_id, variant_id)` so the same variant is
+        always one row. **Deliberately no price/name snapshot columns** on
+        `cart_items`, unlike `order_items` — the spec's "never trust a
+        client-held cart... re-price on every read" requirement means a cart
+        is a live `(variant_id, quantity)` pointer, not a receipt; every read
+        re-joins `product_variants.price_cents`, which is what makes a price
+        change between add-to-cart and checkout show up automatically with
+        no extra plumbing for 2.7b to build.
+        Migration `0002_tranquil_fenris.sql`, generated via
+        `npm run db:generate` and applied to local dev via `npm run
+    db:migrate`.
+        `src/lib/repos/cart.ts` — createCart, getCartById,
+        listCartItemsByCartId, upsertCartItem (insert-or-set-**exact**-
+        quantity by cart+variant via `onConflictDoUpdate` on the new unique
+        index — deliberately not an increment, so 2.7b's service, not the
+        repo, owns the final-quantity decision after its own stock-clamping
+        logic), removeCartItem. Follows the existing `DbExecutor = db`
+        optional-executor pattern (1.4b's NOTE) on every write so a future
+        service-level transaction (e.g. cart-to-order at checkout, 3.5) can
+        thread one `tx` through cart + order writes together without this
+        module ever importing `db` itself.
+        Tests: `cart.test.ts` (8 integration tests against the real dev
+        database — create, get by id found/not-found, upsert-new,
+        upsert-existing sets quantity in place with no second row, list all
+        items, list empty, remove-last-item empties the cart without
+        deleting the cart row itself). 2 new cases in
+        `schema-indexes.test.ts` for the new unique index and FK targets
+        (same "lazily-evaluated `extraConfig`/FK-thunk needs a real caller"
+        rationale as every other table in that file, per 1.1's NOTE).
+        Confirmed red first (import-resolution error, `@/lib/repos/cart`
+        didn't exist) before implementing.
+        AC met: 100% statement/branch/function/line coverage on
+        `cart.ts` alone; full `npm run verify` green (36 files, 289 tests,
+        98.91/96.43/100/98.86% global coverage, build passes).
+        NOTE for 2.7b: repo tests hit a real gotcha worth flagging again —
+        an earlier run of this test file failed mid-`afterEach` (FK
+        violation deleting a `cart`/product before its `cart_items` row),
+        which left orphaned `test-cart-*` products/variants/cart rows in
+        the shared dev database for the next run to collide with on
+        `products_slug_unique`. Cleaned up by hand this time
+        (`delete from cart_items; delete from carts; delete from
+    product_variants where sku like 'TEST-CART%'; delete from products
+    where slug like 'test-cart%';`). Any future cart test file should
+        delete `cart_items` before `carts`/`products`/`product_variants` in
+        its own cleanup, in that order, same as this file's `afterEach`.
+        NOTE for 2.7b: quantity clamping to "available stock" (this task's
+        AC wording, written before 1.7's made-to-order support existed)
+        needs to reconcile with 1.7's `purchasable = stock > 0 OR
+    allow_backorder` rule — a backorder-enabled variant has no real
+        stock ceiling to clamp against. Decide there whether "clamped to
+        available stock" means "clamped only when backorder is off, no
+        upper bound when it's on" (matches 1.7's storefront/JSON-LD
+        precedent) rather than re-deriving purchasability a third way; the
+        product-listing (2.3) and JSON-LD (2.6b) modules are the two
+        existing places that logic already lives.
+
+  - [ ] **2.7b Cart service — pricing, clamping, business logic**
+        Deps: 2.7a. `src/lib/services/cart.ts`. Re-price every line from
+        `product_variants` on every read (never trust `cart_items`, which
+        has no price column by design — see 2.7a); re-clamp quantity to
+        available stock, reconciling with 1.7's backorder rule per 2.7a's
+        NOTE above; when a variant is no longer purchasable at all
+        (inactive, deleted, or zero-stock-no-backorder), drop the line and
+        report it rather than leaving a phantom row — "tell the user
+        something changed rather than silently adjusting"
+        (specs/03-storefront.md).
+        AC: a cart containing a product whose price later changes reflects
+        the new price at checkout; removing the last item empties cleanly;
+        quantity is clamped to available stock. Cart service ≥90% covered
+        (AGENT.md's `src/lib/services/**` floor already requires this, not
+        a special threshold for this task).
+
+  - [ ] **2.7c Cart UI + cookie wiring**
+        Deps: 2.7b. httpOnly `cart_id` cookie (specs/03-storefront.md's
+        "Cart" section), set on first add. Wire the product detail page's
+        existing disabled "Add to cart" button (2.5's NOTE: it's a real
+        `type="button"` outside the variant-select form specifically so
+        this task can attach its own handler) and the header's hardcoded
+        "Cart, 0 items" placeholder (2.1's NOTE). New cart page showing
+        server-recomputed line items/totals.
+        AC: adding an item from the product page updates the header count;
+        the cart page reflects server-recomputed totals and clamped
+        quantities; works with JS disabled (progressive enhancement, same
+        GET-form pattern as 2.3/2.5).
 
 - [ ] **2.8 Content pages**
       Deps: 2.1. About, contact, FAQ, shipping, returns, privacy, terms.

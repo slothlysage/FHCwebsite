@@ -5,6 +5,8 @@ import {
   addresses,
   adminUsers,
   auditLog,
+  cartItems,
+  carts,
   categories,
   discountCodes,
   inventoryMovements,
@@ -82,6 +84,15 @@ describe("explicit indexes", () => {
       ["product_id", "category_id"],
     );
   });
+
+  it("cart_items has a unique index on (cart_id, variant_id) and a cart_id index", () => {
+    const config = getTableConfig(cartItems);
+    const uniqueIndex = config.indexes.find(
+      (index) => index.config.name === "cart_items_cart_id_variant_id_idx",
+    );
+    expect(uniqueIndex?.config.unique).toBe(true);
+    expect(indexNames(cartItems)).toContain("cart_items_cart_id_idx");
+  });
 });
 
 describe("foreign key targets", () => {
@@ -127,5 +138,11 @@ describe("foreign key targets", () => {
     const targets = fkTargets(inventoryMovements);
     expect(targets).toContain(productVariants);
     expect(targets).toContain(adminUsers);
+  });
+
+  it("cart_items references carts and product_variants", () => {
+    const targets = fkTargets(cartItems);
+    expect(targets).toContain(carts);
+    expect(targets).toContain(productVariants);
   });
 });

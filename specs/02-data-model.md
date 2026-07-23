@@ -110,12 +110,34 @@ value, min_spend_cents, max_uses, times_used, starts_at, ends_at, is_active`
 `id, admin_user_id, action, entity_type, entity_id, before jsonb, after jsonb,
 created_at` — append-only.
 
+## carts / cart_items (added 2026-07-22, task 2.7a)
+
+`carts: id, created_at, updated_at` — one row per httpOnly `cart_id` cookie
+(specs/03-storefront.md's "Cart" section). No `email`/`customer` link; a cart
+is anonymous until checkout.
+
+`cart_items: id, cart_id → carts, variant_id → product_variants, quantity,
+created_at, updated_at` — unique on `(cart_id, variant_id)` so adding an
+already-present variant sets its quantity in place instead of accumulating a
+second row for the same line.
+
+**No price or name snapshot columns on `cart_items`, unlike `order_items`.**
+This is deliberate, not an oversight: the storefront spec requires the cart to
+"never trust a client-held cart... re-price line items from the database on
+every read." A cart is a live pointer to `(variant_id, quantity)` pairs, not a
+receipt — it has no history to preserve, so there is nothing to snapshot.
+`order_items` snapshots because an order must stay readable after the catalog
+changes; a cart simply re-reads `product_variants.price_cents` (and stock)
+every time, which is what makes a price change between add-to-cart and
+checkout show up automatically with no extra plumbing.
+
 ## Indexes to create explicitly
 
 - `products (status, created_at desc)`
 - `product_variants (product_id)`, `product_variants (sku)`
 - `product_attributes (key, value)`
 - `orders (created_at desc)`, `orders (status)`, `orders (email)`
+- `cart_items (cart_id, variant_id)` unique, `cart_items (cart_id)`
 - `inventory_movements (variant_id)`
 
 ## Implementation notes (1.1)
