@@ -216,6 +216,46 @@ type="application/ld+json">` via `dangerouslySetInnerHTML`.
   every variant of a product shares one canonical/URL regardless of which
   one is initially selected.
 
+## Implementation notes (2.6d — OG images)
+
+- Two Next file-convention special files, not a hand-rolled route manually
+  wired into `generateMetadata`'s `openGraph.images`: `src/app/
+opengraph-image.tsx` (static default — applies to every route by
+  inheritance, including `/`, `/products`, and any future content page)
+  and `src/app/(storefront)/products/[slug]/opengraph-image.tsx` (dynamic
+  override for exactly that segment). Next resolves the file into each
+  page's metadata automatically and per-segment — no manual
+  `openGraph.images` code needed in either `generateMetadata`.
+- Both cards are **text-only** — brand name/tagline for the default,
+  product name + "from $X" (lowest active-variant price) for the product
+  card. No product photo is composited in, because real product/brand
+  photography doesn't exist yet (see this repo's `fix_plan.md` "Blocked"
+  section) and `product_images.url` values from the CSV importer aren't
+  guaranteed reachable/right-sized for satori (the renderer behind
+  `next/og`'s `ImageResponse`) to fetch remotely mid-render. Swap in a real
+  photo (e.g. `detail.images[0]`) once that asset exists — don't re-derive
+  "the primary image" a third way, `product-json-ld.ts`'s NOTE already
+  flags this same image list as the one to reuse.
+- The product card fetches `getProductDetail(slug)` and falls back to a
+  generic "Handmade goods" card (no price line) for anything that isn't a
+  live published product — unknown, draft, archived, or soft-deleted slug,
+  or a published product with zero active variants. This mirrors
+  `product-detail.ts`'s own `null`-for-unpublished contract: a stale or
+  guessed link must not leak an unpublished product's real name via its
+  social-preview image, and the route must never throw (a thrown OG image
+  handler surfaces as a broken image to the crawler/chat client requesting
+  it, not a 404).
+- **Vitest gotcha**: `next/og`'s `ImageResponse` rasterizes via `sharp` on
+  the Node runtime. Under this project's default `environment: "jsdom"`
+  (`vitest.config.mts`), `sharp` throws `Unsupported input ... of type
+object` — jsdom's `Buffer`/`Uint8Array` aren't the same realm/constructor
+  `sharp`'s `instanceof` checks expect. Both OG image test files start with
+  a `// @vitest-environment node` docblock (Vitest's documented per-file
+  override) instead of changing the project-wide default, which every
+  other test file still needs for RTL/axe. Any future test that actually
+  invokes `ImageResponse` (rather than mocking `next/og`) needs the same
+  docblock.
+
 ## Cart
 
 Server-side, keyed by an httpOnly `cart_id` cookie. Never trust a client-held

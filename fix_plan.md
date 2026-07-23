@@ -1169,14 +1169,14 @@ verify` green (lint, typecheck, test:coverage, build — `/products/
       form will need a way to set arbitrary attribute keys, not just
       scent/size.
 
-- [ ] **2.6 SEO + structured data**
+- [x] **2.6 SEO + structured data**
       Deps: 2.5. Per-page metadata, OG images, `Product` + `Offer` JSON-LD,
       `sitemap.xml`, `robots.txt`, canonical URLs.
       AC: JSON-LD validates; sitemap lists every published product; filtered
       listing URLs are `noindex` to avoid crawl bloat.
       Split into sub-tasks below (five distinct pieces of work bundled into
       one bullet — same rationale as 1.3/1.4's splits). This umbrella item is
-      ticked `[x]` only once all four below are `[x]`.
+      ticked `[x]` only once all four below are `[x]` — all four are done.
 
   - [x] **2.6a Per-page metadata, canonical URLs, noindex for filtered listings**
         Deps: 2.5. `products/page.tsx` gains `generateMetadata` (title,
@@ -1356,12 +1356,69 @@ stripe/**` 90% floor both clear; `product-json-ld.ts` itself 100%
         flagging only that this closes out three of 2.6's four sub-tasks;
         2.6d is the last one before the umbrella 2.6 can tick.
 
-  - [ ] **2.6d OG images**
-        Deps: 2.6a. Dynamic per-product OG image (`next/og` /
-        `ImageResponse`) plus a static default for non-product pages;
-        wired into each page's `generateMetadata` via `openGraph.images`.
-        AC: the OG image route renders a valid image response and is
-        referenced in the product page's metadata.
+  - [x] **2.6d OG images**
+        Deps: 2.6a. `src/app/opengraph-image.tsx` — static, text-only
+        default (brand name + tagline on the brand cream background) via
+        Next's file-convention special file, applies to every route by
+        default (root layout scope). `src/app/(storefront)/products/[slug]/
+opengraph-image.tsx` — dynamic override for exactly that segment:
+        fetches `getProductDetail(slug)` and renders the product name plus
+        "from $X" (lowest active-variant price), falling back to a generic
+        "Handmade goods" card with no price line for an unknown/draft/
+        archived/soft-deleted slug (same `null`-for-unpublished contract as
+        `product-detail.ts` — never throws, so a stale/guessed link doesn't
+        surface a broken image) or a product with zero active variants.
+        Both files export the Next convention triplet (`alt`, `size: {
+  width: 1200, height: 630 }`, `contentType: "image/png"`) and a
+        default function returning `next/og`'s `ImageResponse`.
+        Deliberately **text-only, no product photo** — per this file's own
+        "Blocked" section, real product/brand photography doesn't exist
+        yet, and `product_images.url` values from the CSV importer aren't
+        guaranteed reachable/right-sized for satori to fetch remotely; swap
+        in a real photo once that asset lands.
+        Used the file-convention (not a hand-rolled `/api/og` route manually
+        wired into `openGraph.images`) because Next resolves it into each
+        page's metadata automatically and per-segment — confirmed by
+        reading `next-metadata-route-loader.js`'s codegen — which is what
+        "referenced in the product page's metadata" means in practice here;
+        no `generateMetadata` edits were needed in either page.
+        GOTCHA (found by an early spike before writing the real tests):
+        `next/og`'s `ImageResponse` rasterizes via `sharp` on the Node
+        runtime, and `sharp` throws `Unsupported input ... of type object`
+        under this project's default `jsdom` Vitest environment — jsdom's
+        cross-realm `Buffer`/`Uint8Array` isn't the same constructor `sharp`
+        checks via `instanceof`. Fixed with a per-file
+        `// @vitest-environment node` docblock on both new test files
+        (Vitest's documented override mechanism) rather than changing the
+        project's global `environment: "jsdom"` — every other test file
+        needs jsdom for RTL/axe.
+        Tests: `opengraph-image.test.ts` (root — dimensions/content-type/alt
+        assertions, then actually invokes the default export and asserts a
+        real non-empty PNG response) and `products/[slug]/
+opengraph-image.test.ts` (5 integration tests against the real dev
+        database, same pattern as `product-detail.test.ts`: dimensions/
+        content-type/alt, a published product with a price renders,
+        unknown slug renders a fallback instead of throwing, a draft
+        product renders the same generic fallback rather than leaking its
+        real name, a published product with zero variants renders without
+        a price line). Both confirmed red first (import-resolution error,
+        modules didn't exist) before implementing.
+        AC met, verified two ways: the test suite above, and a real `next
+dev` server hit with `curl` — `GET /opengraph-image` and
+        `GET /products/shampoo-bar/opengraph-image-<hash>` both returned
+        `200`/`image/png` with real PNG bytes (visually confirmed: brand
+        card for the root, "Shampoo Bar" + "from $12.00" for the product),
+        `GET /products/no-such-slug/opengraph-image-<hash>` also returned a
+        valid fallback PNG rather than erroring, and `curl http://localhost:
+3000/` and `.../products/shampoo-bar` both contained a real
+        `<meta property="og:image" content="http://localhost:3000/...">`
+        tag — Next wired it in automatically, confirming the file-convention
+        approach needed no manual metadata code. `npm run verify` green: 35
+        files, 279 tests, 98.89/96.38/100/98.83% coverage (global 80% floor
+        clears easily), build passes — route table shows `○ /opengraph-image`
+        (static, no DB dependency) and `ƒ /products/[slug]/
+opengraph-image-<hash>` (dynamic, depends on per-slug DB data).
+        **Umbrella 2.6 is now fully `[x]`** (2.6a/b/c/d all done).
 
 - [ ] **2.7 Cart**
       Deps: 2.5. Server-side cart keyed by an httpOnly cookie. Add, update qty,
@@ -1458,7 +1515,7 @@ CRUD to exist first.
 - [ ] **3b.1 Service types + booking Checkout session**
       Deps: 3.1. `service_types` table + repo. Checkout session in `payment`
       mode, price server-derived from `service_types`, `metadata: {
-  service_type_id }`.
+service_type_id }`.
       AC: a tampered client price/service id produces a session with the
       correct server-derived amount (same mandatory test shape as 3.3).
 
