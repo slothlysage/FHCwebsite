@@ -1,4 +1,4 @@
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 
 import { db, type DbExecutor } from "@/lib/db/client";
 import { inventoryMovements, variantStock } from "@/lib/db/schema";
@@ -15,6 +15,25 @@ export async function recordMovement(
     .values(input)
     .returning();
   return movement!;
+}
+
+// Serializes concurrent fulfillment of the same variant so a webhook-time
+// stock recheck (specs/05-payments.md's "Oversell" section, task 3.6) isn't
+// itself racy: `pg_advisory_xact_lock` blocks until any other transaction
+// holding the same key commits or rolls back, and releases automatically at
+// this transaction's end — no separate unlock call, no lock row to clean up.
+// `variant_stock` is an aggregate view, not a real table, so `SELECT ...
+// FOR UPDATE` isn't an option here (Postgres rejects locking clauses on
+// aggregates); an advisory lock keyed on the variant id is the standard
+// substitute. Must be called with the transaction's own executor, not the
+// module-level `db` — the lock is scoped to whichever connection takes it.
+export async function lockVariantStock(
+  variantId: string,
+  executor: DbExecutor,
+): Promise<void> {
+  await executor.execute(
+    sql`select pg_advisory_xact_lock(hashtext(${variantId}))`,
+  );
 }
 
 export async function getStockForVariant(variantId: string): Promise<number> {

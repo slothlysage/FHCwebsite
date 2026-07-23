@@ -22,6 +22,13 @@
       "when": 1784787810451,
       "tag": "0002_tranquil_fenris",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1784845553561,
+      "tag": "0003_mighty_killraven",
+      "breakpoints": true
     }
   ]
 }

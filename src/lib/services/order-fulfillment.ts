@@ -10,7 +10,11 @@
 import type Stripe from "stripe";
 
 import { deleteCartItemsByCartId } from "@/lib/repos/cart";
-import { recordMovement } from "@/lib/repos/inventory";
+import {
+  getStockForVariant,
+  lockVariantStock,
+  recordMovement,
+} from "@/lib/repos/inventory";
 import { createOrder } from "@/lib/repos/orders";
 import { withTransaction } from "@/lib/repos/transaction";
 import { getCartSummary } from "@/lib/services/cart";
@@ -42,10 +46,45 @@ export async function fulfillCheckoutSession(
   // is the source of truth for payment amounts (AGENT.md), including tax
   // and shipping, which automatic_tax/shipping_options compute Stripe-side.
   await withTransaction(async (tx) => {
+    // Oversell guard (specs/05-payments.md's "Oversell" section, task 3.6):
+    // getCartSummary already re-checked stock once, at session-creation
+    // read time — but that doesn't stop two different carts from each
+    // separately clamping to "1 left" for the same last unit. Locking every
+    // distinct variant in this cart (in a fixed, ascending order — so two
+    // concurrent fulfillments touching the same two variants can never
+    // deadlock waiting on each other) before re-reading stock makes the
+    // second fulfillment to reach a given variant see the first's
+    // already-committed decrement, not a stale pre-race number.
+    const sortedVariantIds = [
+      ...new Set(summary.lines.map((line) => line.variantId)),
+    ].sort();
+    for (const variantId of sortedVariantIds) {
+      await lockVariantStock(variantId, tx);
+    }
+
+    // A variant with allowBackorder is made-to-order (1.7) — an oversell
+    // there is expected and legal, not a guard-worthy event. Only a
+    // non-backorder variant selling out between session creation and
+    // payment landing is "unexpected" and flags the whole order.
+    let hasUnexpectedOversell = false;
+    const lineOverselds = new Map<string, number>();
+    for (const line of summary.lines) {
+      const availableStock = await getStockForVariant(line.variantId);
+      const oversoldQuantity = Math.max(0, line.quantity - availableStock);
+      lineOverselds.set(line.variantId, oversoldQuantity);
+      if (oversoldQuantity > 0 && !line.allowBackorder) {
+        hasUnexpectedOversell = true;
+      }
+    }
+
     const order = await createOrder(
       {
         email: session.customer_details?.email ?? session.customer_email ?? "",
-        status: "paid",
+        // Still created and still paid for (Stripe already captured the
+        // charge) — "needs_attention" flags a fulfillment problem, it is
+        // never a silent refund (spec: "a hand-made business often can make
+        // one more").
+        status: hasUnexpectedOversell ? "needs_attention" : "paid",
         subtotalCents: session.amount_subtotal ?? 0,
         shippingCents: session.shipping_cost?.amount_total ?? 0,
         taxCents: session.total_details?.amount_tax ?? 0,
@@ -67,9 +106,19 @@ export async function fulfillCheckoutSession(
         unitPriceCents: line.priceCents,
         quantity: line.quantity,
         lineTotalCents: line.lineTotalCents,
+        oversoldQuantity: lineOverselds.get(line.variantId) ?? 0,
       })),
       tx,
     );
+
+    if (hasUnexpectedOversell) {
+      // No owner-notification channel exists yet (fix_plan.md's "Blocked —
+      // needs human" — same gap 3.4 logged for disputes) — this is the
+      // loudest signal available today.
+      console.error(
+        `[order-fulfillment] order ${order.id} (session ${session.id}) needs_attention: sold out of a non-backorder variant between checkout and payment`,
+      );
+    }
 
     for (const line of summary.lines) {
       await recordMovement(

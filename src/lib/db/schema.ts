@@ -38,6 +38,12 @@ export const orderStatus = pgEnum("order_status", [
   "cancelled",
   "refunded",
   "partially_refunded",
+  // Webhook-time oversell guard (specs/05-payments.md's "Oversell" section,
+  // task 3.6): a non-backorder variant sold out between session creation and
+  // payment landing. The order is still created (money already captured —
+  // Stripe is the source of truth for payment) but flagged instead of
+  // silently marked "paid" so the owner can decide how to fulfill it.
+  "needs_attention",
 ]);
 export const discountKind = pgEnum("discount_kind", ["percent", "fixed"]);
 

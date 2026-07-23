@@ -519,3 +519,79 @@ established for Server Components, extended to Route Handlers. Two
 pair with a `null` `payment_intent`) exist specifically to clear
 `src/lib/stripe/**`'s 90% branch-coverage floor, not as padding — without
 them `paymentIntentIdOf`'s `: null` branch was never exercised.
+
+## Implementation notes (3.6)
+
+`orderStatus` (schema.ts) gained a seventh value, `needs_attention`
+(migration `0003_mighty_killraven.sql`, `ALTER TYPE ... ADD VALUE` — additive,
+expand-safe, no data migration needed). This is the state the spec's
+"Oversell" section names: a non-backorder variant sold out between session
+creation and payment landing. The order is still created and still counted
+as paid — Stripe already captured the charge, and the spec is explicit that
+this is not a silent refund — but its `status` is `needs_attention` instead
+of `paid` so it's visibly distinct from a normal fulfillment until 4.9's
+audit/orders dashboard gives the owner a real place to see it.
+
+**Why "session creation" alone isn't enough.** `getCartSummary` (2.7b) already
+re-checks stock and clamps quantity on every read, including the one
+`createCheckoutSession` (3.3) does — but that only protects one cart against
+itself. It says nothing about a second, entirely different cart that reads
+the same "1 left" a moment later and also clamps to 1. Both checkouts can
+complete payment; only at webhook/fulfillment time, when both try to claim
+the same physical unit, does the conflict become detectable. Hence the spec's
+"and again at webhook time."
+
+**Making the webhook-time recheck itself race-free.** Naively re-reading
+`getStockForVariant` inside `fulfillCheckoutSession`'s transaction doesn't
+help by itself: two concurrent transactions can both read "1 in stock"
+before either has committed its own decrement. `src/lib/repos/
+inventory.ts`'s new `lockVariantStock(variantId, executor)` calls
+`pg_advisory_xact_lock(hashtext(variantId))` — a session-level advisory lock
+scoped to the current transaction, released automatically at commit or
+rollback, no separate unlock call or lock table to clean up. A second
+transaction trying to lock the same variant blocks until the first commits
+(or rolls back), at which point its own stock re-read sees the first's
+already-committed movement. `variant_stock` is a plain aggregate view, not a
+table, so `SELECT ... FOR UPDATE` was not an option (Postgres rejects locking
+clauses on aggregate queries) — the advisory lock is the standard substitute.
+
+`fulfillCheckoutSession` locks every _distinct_ variant id in the cart, in
+ascending sorted order, before re-checking any of them — not each variant
+immediately before its own check. Fixed, cross-transaction-consistent lock
+ordering is what rules out a deadlock between two carts that share two or
+more variants in different orders (cart A: candle then soap; cart B: soap
+then candle) — both transactions always acquire locks low-id-first, so
+neither can end up waiting on a lock the other already holds while holding
+one the other wants.
+
+**Oversold math and the unexpected/expected split.** For each line,
+`oversoldQuantity = max(0, requestedQuantity - stockAfterLock)`, written to
+the new `order_items.oversoldQuantity` column (schema already had it, from
+1.7, default 0, previously never actually computed by checkout — 3.4's own
+NOTE flagged this as 3.6's job). A variant with `allowBackorder: true` is
+made-to-order (1.7): an oversold quantity there is normal and legal, and does
+**not** flag the order. Only `oversoldQuantity > 0` on a **non**-backorder
+variant is "unexpected" and sets the whole order's status to
+`needs_attention`. Inventory is still decremented by the full requested
+quantity in every case (the ledger reflects what was actually sold, negative
+or not) — the guard changes what the order is _labeled_, never what was
+charged or shipped-in-principle.
+
+**Owner notification is still just `console.error`,** same gap fix_plan.md's
+"Blocked — needs human" already logs for `charge.dispute.created` (3.4) — no
+real channel (email/SMS/dashboard) exists yet. Unlike disputes, though,
+`needs_attention` did get a real schema value in this task, because the spec
+named it explicitly; disputes remain unresolved because the spec only says
+"notify owner" without naming a status.
+
+**Regression/concurrency tests** (`order-fulfillment.test.ts`): (1) a
+backorder variant oversold by a single fulfillment call keeps `status: "paid"`
+and records `oversoldQuantity` on the item — proves the "expected oversell"
+path doesn't false-positive; (2) two carts for the same last unit of a
+non-backorder variant, fulfilled via `Promise.all` (genuine concurrent
+transactions against the real dev database, not a mocked race), end with
+exactly one order `"needs_attention"` and one `"paid"`, the two items'
+`oversoldQuantity` summing to exactly 1, and final stock at -1 (1 on hand,
+2 sold). Confirmed both new tests fail for the right reason (both orders
+`"paid"`, `oversoldQuantity` always 0) against the pre-3.6 code before
+implementing the lock + recheck.

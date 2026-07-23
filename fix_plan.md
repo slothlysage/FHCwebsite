@@ -2135,10 +2135,66 @@ transaction.ts`, from 1.4b) — 3.4 had these as four independent writes;
       See `specs/05-payments.md`'s updated "Implementation notes (3.4)"
       section for the full detail.
 
-- [ ] **3.6 Oversell guard**
+- [x] **3.6 Oversell guard**
       Deps: 3.5. Re-check stock at session creation and again at webhook time.
       AC: two concurrent checkouts for the last unit result in one fulfilled order
       and one that is caught and refunded/flagged. Concurrency test required.
+      Session-creation recheck already existed (2.7b's `getCartSummary`
+      re-clamps every read against live stock) — this task is the webhook-time
+      half. `orderStatus` gained `needs_attention` (migration
+      `0003_mighty_killraven.sql`, additive `ALTER TYPE ... ADD VALUE`), per
+      the spec's own wording — not "refunded," which the spec explicitly
+      rules out ("we do not silently refund, because a hand-made business
+      often can make one more"). Followed the spec over this bullet's own
+      looser "refunded/flagged" phrasing.
+      New `src/lib/repos/inventory.ts` function `lockVariantStock(variantId,
+    executor)` — a `pg_advisory_xact_lock` keyed on the variant id,
+      transaction-scoped (auto-released at commit/rollback, no unlock call).
+      `variant_stock` is an aggregate view, so `SELECT ... FOR UPDATE` isn't
+      available; the advisory lock is the substitute. `order-fulfillment.ts`'s
+      `fulfillCheckoutSession` now locks every distinct variant in the cart,
+      in ascending sorted order (deadlock-free ordering across concurrent
+      transactions sharing variants), re-reads stock per line, and computes
+      `oversoldQuantity = max(0, quantity - stock)` — written to
+      `order_items.oversoldQuantity` (schema column existed since 1.7, never
+      actually computed until now). A backorder-allowed (`allowBackorder:
+    true`) variant being oversold is expected/legal (1.7) and does not flag
+      the order; only an oversold **non**-backorder variant sets the whole
+      order's status to `needs_attention`. Inventory is still decremented by
+      the full requested quantity either way — the guard changes the order's
+      label, not what was charged.
+      Owner notification is `console.error` only — same gap as 3.4's dispute
+      handler (no real channel exists yet); see "Blocked — needs human"
+      below, extended rather than duplicated.
+      Tests (`order-fulfillment.test.ts`, 2 new): a backorder variant oversold
+      by a single call stays `"paid"` with `oversoldQuantity` recorded (proves
+      "expected oversell" doesn't false-positive); two carts racing for the
+      last unit of a non-backorder variant, fulfilled via a real `Promise.all`
+      against the dev database (not a mocked race), end with exactly one order
+      `"needs_attention"` and one `"paid"`, `oversoldQuantity` summing to 1
+      across both, final stock -1. Both confirmed red first (both orders
+      `"paid"`, `oversoldQuantity` always 0) against the pre-3.6 code, and
+      re-ran 4x to check for flakiness before trusting the concurrency test.
+      AC met: `npm run verify` green — 49 files, 408 tests, 98.45/93.85/100/
+      98.39% global coverage (`src/lib/services/**` aggregate clears its 90%
+      floor; `order-fulfillment.ts` alone sits at 67.74% branches, but every
+      uncovered branch there — `session.customer_email`/`shipping_cost`/
+      `total_details`/`payment_intent`-shape fallbacks — predates this task,
+      confirmed via `git stash` + an isolated coverage run against the
+      pre-3.6 file, not a gap this task introduced), build passes.
+      See `specs/05-payments.md`'s new "Implementation notes (3.6)" for the
+      full trace, including why the lock has to be acquired via the
+      transaction's own executor, not the module-level `db`.
+      NOTE for 3.7 (confirmation email): a `needs_attention` order still
+      needs _some_ customer-facing signal eventually (the spec doesn't say
+      the customer is told, only the owner) — decide with the owner whether
+      the receipt email's copy should differ for this status, or whether
+      that's purely an owner-side concern for now.
+      NOTE for 4.6/4.9 (orders dashboard / audit log): `needs_attention`
+      orders have no dashboard surface yet — today the only way to find one
+      is a direct query (`listOrdersByStatus("needs_attention")` already
+      works, added no new repo function since 1.3d's existing one is generic
+      over status).
 
 - [ ] **3.7 Confirmation page + transactional email**
       Deps: 3.5. Success page keyed by session id (not order id — don't leak an
@@ -2576,6 +2632,11 @@ partially_refunded`) and no notification channel exists yet (3.7 wires
   decision (new `disputed_at` column? repurpose a status value?) or an
   owner-notification decision (email? SMS? dashboard badge, deferred to
   4.9's audit log view?), not a guess made mid-webhook-task.
+  NOTE (3.6): the oversell guard hit the exact same "no owner-notification
+  channel" gap and also only `console.error`s (see `order-fulfillment.ts`) —
+  unlike disputes, that task's status value (`needs_attention`) _did_ get
+  added to the schema, since specs/05-payments.md named it explicitly. The
+  missing piece for both is only the notification channel itself.
 - **USPS Hazmat/carrier-restriction confirmation for candles, needed before
   4.7's first real label purchase and definitely before any international
   shipping** (`specs/07-security-legal.md`'s existing flammable-goods flag,
