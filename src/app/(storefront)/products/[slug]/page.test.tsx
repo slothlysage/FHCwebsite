@@ -83,6 +83,48 @@ describe("ProductDetailPage", () => {
     expect(screen.getByText("Soy wax, lavender oil")).toBeInTheDocument();
     expect(screen.getByText("$24.00")).toBeInTheDocument();
     expect(screen.getByAltText("Lavender candle")).toBeInTheDocument();
+
+    const script = document.querySelector('script[type="application/ld+json"]');
+    expect(script).not.toBeNull();
+    const jsonLd = JSON.parse(script!.innerHTML);
+    expect(jsonLd).toMatchObject({
+      "@context": "https://schema.org",
+      "@type": "Product",
+      name: "Lavender Candle",
+      description: "A calming candle.",
+      image: ["https://example.com/candle.jpg"],
+      sku: "test-detail-page-full-sku",
+      offers: {
+        "@type": "Offer",
+        price: "24.00",
+        priceCurrency: "USD",
+        availability: "https://schema.org/BackOrder",
+        url: expect.stringContaining("/products/test-detail-page-full"),
+      },
+    });
+  });
+
+  it("omits the JSON-LD script when the product has no images", async () => {
+    const product = await createProduct({
+      slug: "test-detail-page-no-images",
+      name: "No Image Candle",
+      status: "published",
+    });
+    insertedProductIds.push(product.id);
+    await createVariant({
+      productId: product.id,
+      sku: "test-detail-page-no-images-sku",
+      name: "8oz",
+      priceCents: 2400,
+      weightGrams: 227,
+      position: 0,
+    });
+
+    render(await withParams({ slug: "test-detail-page-no-images" }));
+
+    expect(
+      document.querySelector('script[type="application/ld+json"]'),
+    ).toBeNull();
   });
 
   it("selects the variant named by the ?variant= query param", async () => {

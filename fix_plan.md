@@ -618,7 +618,7 @@ tests/fixtures/catalog.csv --apply` — all 5 products diffed `[update]`
       (all 5 products `[unchanged]`, since this only added facet data);
       `listFilterableAttributeValues("scent")` returns exactly the 9 real
       scents; `listFilterableCategories()` returns `Body Butter, Hair
-    Care, Soap, candles` — 4 categories, matching the AC's "4 product
+  Care, Soap, candles` — 4 categories, matching the AC's "4 product
       types" (the `Type` value `Candles` slugifies to `candles`, which
       collided with a category of that same slug/lower-name already
       created by an earlier iteration's `catalog-import.test.ts` runs —
@@ -1245,15 +1245,78 @@ page.test.tsx` (title/description/canonical for a real published
         sitemap only ever lists the bare canonical paths, but flagging the
         connection in case scope grows.
 
-  - [ ] **2.6b `Product` + `Offer` JSON-LD**
-        Deps: 2.6a. `products/[slug]/page.tsx` renders a `<script
-type="application/ld+json">` with schema.org `Product` (name,
-        description, image, sku) + nested `Offer` (price, `priceCurrency`,
-        `availability` derived from the selected variant's live stock, `url`
-        = the canonical product URL) for the initially-selected variant.
-        AC: the emitted JSON-LD parses as valid JSON and validates against
-        schema.org's `Product`/`Offer` required fields (name, image, offers
-        with price/priceCurrency/availability).
+  - [x] **2.6b `Product` + `Offer` JSON-LD**
+        Deps: 2.6a. New pure module `src/lib/seo/product-json-ld.ts` —
+        `buildProductJsonLd(detail: ProductDetail, selectedSku, siteUrl)`
+        returns a schema.org `Product` object (name, `description` omitted
+        — not `null` — when the product has none, `image` = every image
+        URL, `sku` = the selected variant's SKU) with a nested `Offer`
+        (`price` as a plain decimal string via `(cents/100).toFixed(2)`, not
+        `formatPriceCents`'s `"$24.00"` — schema.org wants a bare number
+        string, not a currency-formatted one; `priceCurrency: "USD"`; `url`
+        = `${siteUrl}/products/{slug}`, deliberately without `?variant=`,
+        matching 2.6a's canonical). `availability` is a 3-way map over the
+        selected variant's live stock/`allowBackorder` (1.7): `stock > 0` →
+        `https://schema.org/InStock`; `stock <= 0 && allowBackorder` →
+        `https://schema.org/BackOrder` (a real schema.org `ItemAvailability`
+        enum member — chosen over `OutOfStock` because 1.7's "Made to
+        order" UI copy would otherwise contradict the structured data);
+        else → `https://schema.org/OutOfStock`. Falls back to the first
+        variant when `selectedSku` matches none, mirroring the page
+        component's own fallback. Returns `null` (page renders no script
+        tag at all) when `detail.images` is empty or there are no variants
+        — schema.org's required `image`/`offers` fields can't be populated
+        validly, so emitting a JSON-LD block that fails validation would be
+        worse than omitting it.
+        `products/[slug]/page.tsx` calls it with `env.NEXT_PUBLIC_SITE_URL`
+        (server-side read of the full merged `env`, same pattern as
+        `layout.tsx`'s `metadataBase`) and the page's already-computed
+        `initialSku`, and renders the result via
+        `dangerouslySetInnerHTML`/`JSON.stringify` inside a `<script
+type="application/ld+json">` — confirmed via `npx eslint` that this
+        repo's flat config has no `react/no-danger` rule active, so no
+        disable comment is needed (added one first, then removed it after
+        lint reported it as an unused directive).
+        Tests: `product-json-ld.test.ts` (7 unit tests — full valid graph
+        incl. a `JSON.parse(JSON.stringify(...))` round-trip, BackOrder vs.
+        OutOfStock for the two zero-stock cases, selectedSku-not-found
+        fallback, description omitted not nulled, null return for
+        zero-images and zero-variants); 2 new cases in `products/[slug]/
+page.test.tsx` (the full-product test now also parses
+        `document.querySelector('script[type="application/ld+json"]')`'s
+        `innerHTML` and asserts the whole object via `toMatchObject`; a new
+        case asserts no script tag at all for a product with no images).
+        All confirmed red first (import-resolution error for the new
+        module; no script element found in the DOM for the page test)
+        before implementing.
+        AC met: the JSON-LD parses as valid JSON (round-trip test) and
+        contains every schema.org-required field (`name`, `image`, `offers`
+        with `price`/`priceCurrency`/`availability`).
+        Unrelated pre-existing failure fixed in passing (blocked this
+        task's `npm run verify`, confirmed via `git stash` that it already
+        failed on `main`): `attributes.test.ts`'s "lists distinct values
+        for a key" test asserted `listFilterableAttributeValues("scent")`
+        equals exactly `["lavender", "vanilla"]` — true when the dev
+        database was empty, false now that the real catalog import (1.4b/
+        1.6, closed 2026-07-22) permanently seeded 9 real Title Case scent
+        values into the same shared dev database this test runs against.
+        Fixed by reading a baseline before inserting the test's own
+        lowercase values and asserting the delta (`arrayContaining` the two
+        new values, length grew by exactly 2) instead of the whole table's
+        contents — the same "shared dev database, don't assert global
+        emptiness" lesson 1.6's own NOTE already flagged for
+        `listFilterableCategories`, just not yet applied here.
+        `npm run verify` green: 31 files, 268 tests, 98.83/96.3/100/98.77%
+        coverage (global 80% floor and `src/lib/services/**`/`src/lib/
+stripe/**` 90% floor both clear; `product-json-ld.ts` itself 100%
+        across the board), build passes, `/products/[slug]` still `ƒ`.
+        NOTE for 2.6c (sitemap): no change needed to this module — the
+        sitemap only lists bare canonical paths, it doesn't touch JSON-LD.
+        NOTE for 2.6d (OG images): `buildProductJsonLd`'s image-array
+        source (`detail.images.map(i => i.url)`) is the same image list an
+        OG image route would draw its source photo from — don't re-derive
+        "the primary image" a third way if 2.6d needs one; reuse
+        `detail.images[0]`.
 
   - [ ] **2.6c `sitemap.xml` + `robots.txt`**
         Deps: 2.5. `src/app/sitemap.ts` (Next's `MetadataRoute.Sitemap`) —

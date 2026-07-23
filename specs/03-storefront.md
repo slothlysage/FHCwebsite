@@ -188,6 +188,34 @@ soon"`) so 2.7 only has to attach behavior, not build layout. It's
   `type="button"`, not `type="submit"`, and lives outside the variant
   `<select>`'s own form so it won't fight that form's GET submission.
 
+## Implementation notes (2.6b — Product/Offer JSON-LD)
+
+- `src/lib/seo/product-json-ld.ts`'s `buildProductJsonLd` is pure (no DB, no
+  Next imports) — it takes an already-fetched `ProductDetail`, the currently
+  selected SKU, and an absolute `siteUrl`, and returns a plain object or
+  `null`. The page (`products/[slug]/page.tsx`) is the only caller and is
+  responsible for `JSON.stringify`-ing it into a `<script
+type="application/ld+json">` via `dangerouslySetInnerHTML`.
+- Returns `null` — the page renders no script tag at all — when
+  `detail.images` is empty or the product has no variants. schema.org's
+  `Product`/`Offer` types require `image` and `offers`; emitting JSON-LD that
+  fails required-field validation is worse than omitting the block entirely.
+- `availability` is 3-way, not the usual InStock/OutOfStock binary:
+  `stock > 0` → `InStock`; `stock <= 0 && allowBackorder` → `BackOrder` (a
+  real schema.org `ItemAvailability` value); otherwise `OutOfStock`. This
+  exists because of 1.7's made-to-order/oversell support — a zero-stock,
+  backorderable variant shows "Made to order" in the UI, and structured data
+  claiming `OutOfStock` for the same variant would contradict it.
+- `Offer.price` is a bare decimal string (`(cents / 100).toFixed(2)`, e.g.
+  `"24.00"`), not `format.ts`'s `formatPriceCents` (`"$24.00"`) — schema.org
+  wants a currency-free number string, with `priceCurrency` as the separate
+  `"USD"` field.
+- `Offer.url` is the same canonical shape 2.6a's `generateMetadata` already
+  uses (`/products/{slug}`, absolute via `siteUrl`, no `?variant=`) — the
+  variant selector is UI state on one resource, not a distinct page, so
+  every variant of a product shares one canonical/URL regardless of which
+  one is initially selected.
+
 ## Cart
 
 Server-side, keyed by an httpOnly `cart_id` cookie. Never trust a client-held

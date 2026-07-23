@@ -3,7 +3,9 @@ import { notFound } from "next/navigation";
 
 import { ProductGallery } from "@/components/product-gallery";
 import { VariantSelector } from "@/components/variant-selector";
+import { env } from "@/lib/env";
 import { truncateForMeta } from "@/lib/format";
+import { buildProductJsonLd } from "@/lib/seo/product-json-ld";
 import {
   getProductDetail,
   type ProductDetail,
@@ -79,8 +81,20 @@ export default async function ProductDetailPage({
     detail.variants[0]?.sku ??
     "";
 
+  const jsonLd = buildProductJsonLd(
+    detail,
+    initialSku,
+    env.NEXT_PUBLIC_SITE_URL,
+  );
+
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6">
+      {jsonLd && (
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        />
+      )}
       <div className="lg:flex lg:gap-10">
         <ProductGallery images={detail.images} productName={detail.name} />
         <div className="mt-8 flex-1 lg:mt-0">

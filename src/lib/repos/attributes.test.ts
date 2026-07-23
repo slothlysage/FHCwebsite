@@ -48,6 +48,14 @@ describe("attributes repo", () => {
   });
 
   it("lists distinct values for a key across published products", async () => {
+    // Scoped against a baseline read, not an exact-equals on the whole
+    // table: the real catalog import (fix_plan 1.4b/1.6) has been applied
+    // to this dev database and already owns real "scent" values, so
+    // asserting the *entire* result set would break the moment that catalog
+    // changes. "lavender"/"vanilla" (lowercase) never collide with the real
+    // import's Title Case scent names.
+    const baseline = await listFilterableAttributeValues("scent");
+
     const a = await makeProduct("test-attr-list-a");
     const b = await makeProduct("test-attr-list-b");
     await setProductAttribute(a.id, "scent", "lavender");
@@ -56,7 +64,8 @@ describe("attributes repo", () => {
 
     const values = await listFilterableAttributeValues("scent");
 
-    expect(values).toEqual(["lavender", "vanilla"]);
+    expect(values).toEqual(expect.arrayContaining(["lavender", "vanilla"]));
+    expect(values).toHaveLength(baseline.length + 2);
   });
 
   it("excludes values that only belong to unpublished products", async () => {
