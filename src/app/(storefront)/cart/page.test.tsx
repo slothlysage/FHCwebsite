@@ -29,6 +29,20 @@ import CartPage from "./page";
 // products/page.test.tsx. Only next/headers' cookies() (via the cart-cookie
 // mock above) is faked, since it requires an active Next request to work at
 // all outside a real server.
+//
+// The page now imports `createCheckoutSessionAction` (3.3), which
+// transitively imports the Stripe singleton client — but only for its
+// `action={...}` prop, never invoked by these tests. Constructing a `Stripe`
+// instance makes no network call (specs/05-payments.md's "Implementation
+// notes (3.1)"), so this file needs no msw setup unlike checkout.test.ts.
+
+async function renderCart(checkoutError?: string) {
+  return render(
+    await CartPage({
+      searchParams: Promise.resolve({ checkout_error: checkoutError }),
+    }),
+  );
+}
 
 describe("CartPage", () => {
   const insertedProductIds: string[] = [];
@@ -56,7 +70,7 @@ describe("CartPage", () => {
   });
 
   it("shows an empty-cart message with a link to keep shopping when there is no cart cookie", async () => {
-    render(await CartPage());
+    await renderCart();
 
     expect(screen.getByText(/your cart is empty/i)).toBeInTheDocument();
     expect(
@@ -94,7 +108,7 @@ describe("CartPage", () => {
     });
     cartCookie.cartId = cart.id;
 
-    render(await CartPage());
+    await renderCart();
 
     expect(
       screen.getByRole("link", { name: "Cart Page Candle" }),
@@ -135,7 +149,7 @@ describe("CartPage", () => {
     await deactivateVariant(variant.id);
     cartCookie.cartId = cart.id;
 
-    render(await CartPage());
+    await renderCart();
 
     expect(
       screen.getByText(/deactivated candle is no longer available/i),
@@ -174,7 +188,7 @@ describe("CartPage", () => {
     });
     cartCookie.cartId = cart.id;
 
-    render(await CartPage());
+    await renderCart();
 
     expect(
       screen.getByText(/clamped candle quantity was reduced to 1/i),
@@ -208,8 +222,66 @@ describe("CartPage", () => {
     });
     cartCookie.cartId = cart.id;
 
-    render(await CartPage());
+    await renderCart();
 
     expect(screen.getByText(/made to order/i)).toBeInTheDocument();
+  });
+
+  it("shows a Checkout button with a fresh nonce when the cart has items", async () => {
+    const product = await createProduct({
+      slug: "test-cart-page-checkout-button",
+      name: "Checkout Button Candle",
+      status: "published",
+    });
+    insertedProductIds.push(product.id);
+    const variant = await createVariant({
+      productId: product.id,
+      sku: "TEST-CART-PAGE-CHECKOUT-BUTTON",
+      name: "8oz",
+      priceCents: 1000,
+      weightGrams: 200,
+    });
+    insertedVariantIds.push(variant.id);
+    const cart = await createCart();
+    insertedCartIds.push(cart.id);
+    await upsertCartItem({
+      cartId: cart.id,
+      variantId: variant.id,
+      quantity: 1,
+    });
+    cartCookie.cartId = cart.id;
+
+    const { container: firstRender, unmount } = await renderCart();
+    const firstNonce = firstRender.querySelector<HTMLInputElement>(
+      'input[name="nonce"]',
+    )?.value;
+    expect(
+      within(firstRender).getByRole("button", { name: "Checkout" }),
+    ).toBeInTheDocument();
+    unmount();
+
+    const { container: secondRender } = await renderCart();
+    const secondNonce = secondRender.querySelector<HTMLInputElement>(
+      'input[name="nonce"]',
+    )?.value;
+
+    expect(firstNonce).toBeTruthy();
+    expect(firstNonce).not.toBe(secondNonce);
+  });
+
+  it("does not show a Checkout button for an empty cart", async () => {
+    await renderCart();
+
+    expect(
+      screen.queryByRole("button", { name: "Checkout" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows a checkout_error banner when redirected back from a failed checkout attempt", async () => {
+    await renderCart("unavailable");
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /aren't available for checkout right now/i,
+    );
   });
 });

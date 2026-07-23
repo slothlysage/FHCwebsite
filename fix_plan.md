@@ -1887,11 +1887,67 @@ client.ts`: (1) the Stripe SDK's default Node HTTP client defers
         (reset to `null`); the 51 stray Stripe-side objects were not deleted
         and still need an owner decision.
 
-- [ ] **3.3 Checkout session**
+- [x] **3.3 Checkout session**
       Deps: 2.7, 3.2. Build the session from the server-side cart. Collect shipping
       address, apply shipping rates, enable Stripe Tax.
       AC: a tampered client payload (altered price or quantity) produces a session
       with the correct server-derived amounts. This test is mandatory.
+      `src/lib/services/checkout.ts` — `createCheckoutSession(cartId,
+    {idempotencyKey})`. Takes only a cart id + idempotency key, no
+      price/quantity/total parameter exists for a client to reach; all
+      pricing comes from `getCartSummary` (2.7). Line items reference each
+      variant's already-synced `stripePriceId` (3.2's `runStripeSync`), not
+      an inline `price_data` block — so the amount charged is whatever
+      Stripe already has on file, and a cart containing an unsynced variant
+      fails the whole checkout (`{ok: false, reason: "unavailable"}`)
+      rather than silently dropping that line. Flat US-only shipping rate
+      (placeholder amount, owner to confirm) + `automatic_tax: {enabled:
+    true}` (needs a Stripe Dashboard Tax origin address before a real,
+      non-mocked call succeeds — not something code can satisfy).
+      `src/lib/actions/checkout.ts` — `createCheckoutSessionAction`, a
+      Server Action bound to a new Checkout form on the cart page
+      (`src/app/(storefront)/cart/page.tsx`). Only trusted input read from
+      `formData` is a `nonce` field the cart page generates fresh
+      (`crypto.randomUUID()`) on every render; `cartId` comes from the
+      `cart_id` cookie. Idempotency key is `checkout-session-{cartId}-
+    {nonce}` — not derived from `carts.updatedAt`, which is never bumped
+      after cart creation and so can't distinguish "same attempt retried"
+      from "a week later." Mandatory tamper test
+      (`src/lib/actions/checkout.test.ts`) POSTs a payload with extra
+      `price`/`quantity`/`total`/`variantId` fields alongside the real
+      nonce and asserts the resulting Stripe session's line items match the
+      real server-side cart, not the submitted values — those fields are
+      never read at all, not merely validated away.
+      `getCartSummary`'s `CartLine` gained a `stripePriceId` field (2.7's
+      cart service, extended not duplicated) since checkout needed it and
+      no other read path exposed it.
+      `tests/msw/stripe-server.ts` (3.2b's fake) gained a
+      `POST /v1/checkout/sessions` handler + `getStripeFakeCheckoutSessions()`.
+      Full details, including the "no `order_draft_id`" spec deviation and
+      the dynamic-import-after-`stripeServer.listen()` requirement, in
+      specs/05-payments.md's "Implementation notes (3.3)".
+      Tests: 7 in `checkout.test.ts` (empty cart, unsynced variant,
+      line-item/metadata/mode building, shipping, tax, idempotency, a
+      propagated Stripe error), 5 in `actions/checkout.test.ts` (no cart
+      cookie, missing nonce, the mandatory tamper test, empty-cart redirect,
+      double-submit idempotency), 3 new in the cart page's own test file
+      (Checkout button + fresh-nonce-per-render, hidden for an empty cart,
+      checkout_error banner). All confirmed red first (module/export didn't
+      exist) before implementing.
+      AC met, verified two ways: `npm run verify` green (45 files, 376
+      tests, 98.3/95.11/100/98.23% overall — `src/lib/services/**`'s 90%
+      floor clears in aggregate at 97.5/93.8/100/97.41% despite
+      `checkout.ts` alone sitting at 83.33% branches; build's route table
+      shows `ƒ /cart`), and a real `next dev` server hit end-to-end via curl
+      mimicking a no-JS form submit (add real item to cart via the real
+      add-to-cart action → GET /cart, confirm the Checkout form + nonce
+      render → POST the Checkout form) against the real (unsynced) dev DB
+      catalog: correctly redirected to `/cart?checkout_error=unavailable`
+      and rendered the banner, with zero Stripe calls made — proving the
+      "variant not yet synced" guard works live without needing `3.2`'s
+      `--apply` to have been run first.
+      NOTE for 3.4/3.5: correlate the webhook back to a cart via
+      `session.metadata.cart_id` only — there is no `order_draft_id`.
 
 - [ ] **3.4 Webhook endpoint**
       Deps: 3.3. Verify signature. Handle `checkout.session.completed`,
@@ -2235,6 +2291,29 @@ like 'FC_%';` was run against the local dev DB, confirmed back to the
 false})` per product, since Prices can't be deleted once created, only
   archived) — needs explicit authorization first per AGENT.md's live-system
   caution, even for test mode.
+- **Flat shipping rate is a placeholder (3.3).** `checkout.ts`'s
+  `FLAT_RATE_SHIPPING_CENTS = 600` ($6.00 US-only) is a made-up number so
+  checkout could ship without inventing the shipping-rate admin surface
+  early (that's 4.x's Settings page, specs/04-admin.md). Owner should
+  confirm/replace with real carrier rates before launch.
+- **Stripe Tax needs a Dashboard origin address (3.3).** `checkout.ts` sends
+  `automatic_tax: {enabled: true}` unconditionally, but a real (non-mocked)
+  Checkout Session creation call will fail until the connected Stripe
+  account has an origin address configured under Tax settings — that's a
+  Dashboard step, not something code can do. Untested against live Stripe
+  in 3.3 for the same reason 3.2b's `--apply` wasn't (see the stray-objects
+  entry above) — verify this once the owner is ready to run a real session.
+- **Checkout requires 3.2's `--apply` to have actually been run (3.3).** A
+  cart line whose variant has no `stripePriceId` yet makes
+  `createCheckoutSession` return `unavailable` for the whole cart — by
+  design (specs/05-payments.md's "Implementation notes (3.3)": line items
+  reference the synced Stripe Price, never an ad-hoc `price_data` block).
+  The real dev DB's catalog is still unsynced (same blocker as the 51
+  stray-objects entry above), so checkout is not yet usable end-to-end
+  against the real catalog — confirmed live via `next dev` + curl, which
+  correctly hit the `unavailable` guard rather than crashing or mischarging.
+  Resolving the stray-objects decision above and running `--apply` for real
+  unblocks this too.
 
 ## Done
 

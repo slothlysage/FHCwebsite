@@ -24,6 +24,12 @@ export type CartLine = {
   lineTotalCents: number;
   stock: number;
   allowBackorder: boolean;
+  // Null until the variant has been synced to Stripe (3.2's
+  // `runStripeSync`). Checkout (3.3) treats a cart containing an unsynced
+  // line as not yet purchasable rather than falling back to an ad-hoc
+  // Stripe price, so the amount charged always traces back to the one
+  // Stripe Price object this variant is known by.
+  stripePriceId: string | null;
 };
 
 export type CartAdjustment =
@@ -160,6 +166,7 @@ export async function getCartSummary(cartId: string): Promise<CartSummary> {
       lineTotalCents: variant.priceCents * quantity,
       stock,
       allowBackorder: variant.allowBackorder,
+      stripePriceId: variant.stripePriceId,
     });
   }
 

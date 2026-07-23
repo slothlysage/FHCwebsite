@@ -302,3 +302,95 @@ external system the same way 1.4b's HUMAN GATE treated the first catalog
 `--apply`. Whether to run it for real is the owner's call; see "Blocked —
 needs human" for the exact state to decide against (51 stray test-mode
 objects from the debugging incident above still need a decision either way).
+
+## Implementation notes (3.3)
+
+`src/lib/services/checkout.ts` — `createCheckoutSession(cartId, { idempotencyKey })`.
+Deliberately takes only a `cartId` and a caller-derived `idempotencyKey`, no
+line items, prices, or quantities — there is no parameter for a client to
+put a tampered price/quantity/total into, which is what makes the "tampered
+client payload" AC (this spec's "Checkout session" section) true by
+construction rather than by validation. All pricing/availability comes from
+`getCartSummary` (2.7's cart service), which already re-fetches every
+variant, re-checks `is_active`/stock, and re-prices from the database
+(specs/03-storefront.md's "3.5 (checkout) should call `getCartSummary`..."
+note — that note predates the 3.3 split but the guidance still applies).
+
+**Line items reference the synced Stripe Price, not `price_data`.** Each
+line item is `{ price: line.stripePriceId, quantity: line.quantity }` — the
+Price id 3.2's `runStripeSync` writes back onto the variant — rather than an
+inline `price_data` block built from `line.priceCents`. This means the
+amount actually charged is whatever Stripe has on file for that Price,
+never a number this function computes or a client could reach, and it's why
+3.3 depends on 3.2: **a cart line whose variant has no `stripePriceId` makes
+checkout return `{ ok: false, reason: "unavailable" }` for the whole cart**
+rather than falling back to an ad-hoc price. Operationally this means
+`npm run sync-stripe -- --apply` must have been run for a variant before it
+can actually be checked out — true of the real dev DB's catalog right now
+(see "Blocked — needs human", the `--apply` step was deliberately not run
+for real in 3.2b either).
+
+**Shipping and tax.** No shipping-rate admin/config exists yet (that's
+4.x's Settings page per specs/04-admin.md) — `checkout.ts` sends a single
+flat `shipping_rate_data` option (`FLAT_RATE_SHIPPING_CENTS = 600`, US-only
+via `shipping_address_collection.allowed_countries: ["US"]`). This is a
+placeholder the owner should confirm/replace with real carrier rates; see
+"Blocked — needs human". `automatic_tax: { enabled: true }` is sent
+unconditionally — this also requires an "origin address" to be configured
+in the Stripe Dashboard's Tax settings before a real (non-mocked) session
+creation call will succeed; not something code can satisfy, logged under
+"Blocked — needs human" as a launch prerequisite.
+
+**Idempotency key, not derived from cart state.** `carts.updatedAt` is only
+set at cart creation (nothing bumps it on `cart_items` changes), so it
+can't distinguish "same checkout attempt, retried" from "same cart, tried
+again a week later" — using it as the idempotency key would make every
+checkout attempt for a given cart collapse into the first one, forever.
+Instead: `src/lib/actions/checkout.ts`'s `createCheckoutSessionAction`
+reads a `nonce` field from `formData` and builds the key as
+`checkout-session-{cartId}-{nonce}`. The nonce itself comes from
+`crypto.randomUUID()`, generated fresh by the cart page
+(`src/app/(storefront)/cart/page.tsx`) on every render and embedded as a
+hidden input in the Checkout form. Two submits of the _same_ rendered page
+(a double-click) send the same nonce and collapse to one Stripe session; a
+page reload, or a return trip after a cancelled/failed checkout, gets a new
+nonce and a fresh session.
+
+**The only trusted input from the client is that nonce.** `formData.get("nonce")`
+is the single field `createCheckoutSessionAction` reads; `cartId` comes from
+the httpOnly `cart_id` cookie via `readCartId()`, never from the form. A
+POST to this action's endpoint with extra fields (`price`, `quantity`,
+`total`, a spoofed `variantId`, ...) has those fields silently ignored —
+tested directly in `src/lib/actions/checkout.test.ts`'s mandatory tamper
+test, which submits exactly such a payload and asserts the resulting
+session's line items match the real cart (server priceCents × server
+quantity), not the submitted values.
+
+**No `order_draft_id`.** This spec's "Checkout session" step 5 says
+`metadata: { cart_id, order_draft_id }`, but no `order_draft` table or
+concept exists anywhere in `specs/02-data-model.md` — orders (3.5) are only
+created later, from the webhook, not at session-creation time. `checkout.ts`
+sets `metadata: { cart_id: cartId }` only; 3.4/3.5 correlate the webhook's
+`checkout.session.completed` event back to a cart via that one key.
+
+**Mocking.** `tests/msw/stripe-server.ts` gained a
+`POST /v1/checkout/sessions` handler (same in-memory-fake, same
+Idempotency-Key replay behavior as the existing product/price handlers) and
+a `getStripeFakeCheckoutSessions()` accessor. Bracket-notation array fields
+(`line_items[N][price]`, `shipping_options[N][shipping_rate_data]...`) are
+read via a small `extractIndexedColumn` helper — deliberately not a fully
+generic bracket-notation parser, since (like the existing product/price
+handlers) this fake only ever needs to read the handful of fields this
+repo's code actually sends. Both `checkout.test.ts` and
+`actions/checkout.test.ts` use the same dynamic-import-after-
+`stripeServer.listen()` pattern as 3.2b's tests, for the same
+`FetchHttpClient`-captures-`fetch`-at-construction-time reason.
+
+**Not run for real in this task**, for the same reason 3.2b's `--apply`
+wasn't: no real Checkout Session was created against the live-connected
+Stripe test-mode account. Hand-verified instead against a real `next dev`
+server with the real dev DB catalog (unsynced, per above): adding a real
+item to the cart and submitting the real rendered Checkout form correctly
+redirected to `/cart?checkout_error=unavailable` and rendered the banner —
+proving the "no Stripe Price yet" guard works end-to-end without needing
+`--apply` to have been run first.

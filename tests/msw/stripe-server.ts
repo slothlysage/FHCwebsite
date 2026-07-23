@@ -6,9 +6,9 @@
 // (confirmed by reading node_modules/stripe/cjs/net/NodeHttpClient.js), which
 // msw's node interceptors patch the same way libraries like `nock` do, and
 // because a handful of hand-written handlers cover the small, stable surface
-// (products.create, prices.create, prices.retrieve, prices.update) this repo
-// actually calls — a real stripe-mock binary would be one more thing to
-// install/run in CI for four endpoints.
+// (products.create, prices.create, prices.retrieve, prices.update,
+// checkout.sessions.create) this repo actually calls — a real stripe-mock
+// binary would be one more thing to install/run in CI for five endpoints.
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 
@@ -30,12 +30,33 @@ type FakePrice = {
   metadata: Record<string, string>;
 };
 
+// Captured shape of a `checkout.sessions.create` call (3.3), not a full
+// Stripe Session — just what `checkout.ts`'s tests need to assert against:
+// the line items actually billed (resolved against the fake `prices` map,
+// the same way a real Checkout Session resolves a `price` id server-side)
+// plus the pass-through fields (metadata, mode, automatic_tax, shipping).
+type FakeCheckoutSession = {
+  id: string;
+  object: "checkout.session";
+  url: string;
+  mode: string;
+  metadata: Record<string, string>;
+  automaticTaxEnabled: boolean;
+  shippingAddressCollection: string[];
+  shippingOptions: Array<{ displayName: string; amount: number }>;
+  lineItems: Array<{ price: string; quantity: number; unitAmount: number }>;
+};
+
 let idCounter = 0;
 const products = new Map<string, FakeProduct>();
 const prices = new Map<string, FakePrice>();
+const checkoutSessions = new Map<string, FakeCheckoutSession>();
 // Idempotency-Key -> the response body first returned for that key. A real
 // Stripe account keeps this for 24h; tests only need it to outlive one run.
-const idempotencyResponses = new Map<string, FakeProduct | FakePrice>();
+const idempotencyResponses = new Map<
+  string,
+  FakeProduct | FakePrice | FakeCheckoutSession
+>();
 
 function extractMetadata(params: URLSearchParams): Record<string, string> {
   const metadata: Record<string, string> = {};
@@ -46,6 +67,23 @@ function extractMetadata(params: URLSearchParams): Record<string, string> {
     }
   }
   return metadata;
+}
+
+// Extracts every value at a fixed bracket-notation path suffixed with an
+// array index — e.g. `path = "line_items[0][price]"` reads
+// `line_items[0][price]`, `line_items[1][price]`, ... in index order. Stripe
+// (via `qs`) encodes an array of objects as `prefix[N][field]`; this reads
+// one `field` column across all `N`, which is all each call site below
+// needs (a single field per line-item/shipping-option column).
+function extractIndexedColumn(
+  params: URLSearchParams,
+  pathAtIndex: (index: number) => string,
+): string[] {
+  const values: string[] = [];
+  for (let index = 0; params.has(pathAtIndex(index)); index += 1) {
+    values.push(params.get(pathAtIndex(index))!);
+  }
+  return values;
 }
 
 function missingPriceResponse() {
@@ -123,6 +161,63 @@ export const stripeServer = setupServer(
       return HttpResponse.json(price);
     },
   ),
+
+  http.post(
+    "https://api.stripe.com/v1/checkout/sessions",
+    async ({ request }) => {
+      const idempotencyKey = request.headers.get("Idempotency-Key");
+      if (idempotencyKey && idempotencyResponses.has(idempotencyKey)) {
+        return HttpResponse.json(idempotencyResponses.get(idempotencyKey));
+      }
+
+      const params = new URLSearchParams(await request.text());
+      const priceIds = extractIndexedColumn(
+        params,
+        (i) => `line_items[${i}][price]`,
+      );
+      const quantities = extractIndexedColumn(
+        params,
+        (i) => `line_items[${i}][quantity]`,
+      );
+      const lineItems = priceIds.map((priceId, index) => ({
+        price: priceId,
+        quantity: Number(quantities[index] ?? "0"),
+        unitAmount: prices.get(priceId)?.unit_amount ?? 0,
+      }));
+
+      const shippingDisplayNames = extractIndexedColumn(
+        params,
+        (i) => `shipping_options[${i}][shipping_rate_data][display_name]`,
+      );
+      const shippingAmounts = extractIndexedColumn(
+        params,
+        (i) =>
+          `shipping_options[${i}][shipping_rate_data][fixed_amount][amount]`,
+      );
+
+      const id = `cs_test_${++idCounter}`;
+      const session: FakeCheckoutSession = {
+        id,
+        object: "checkout.session",
+        url: `https://checkout.stripe.com/test/pay/${id}`,
+        mode: params.get("mode") ?? "payment",
+        metadata: extractMetadata(params),
+        automaticTaxEnabled: params.get("automatic_tax[enabled]") === "true",
+        shippingAddressCollection: extractIndexedColumn(
+          params,
+          (i) => `shipping_address_collection[allowed_countries][${i}]`,
+        ),
+        shippingOptions: shippingDisplayNames.map((displayName, index) => ({
+          displayName,
+          amount: Number(shippingAmounts[index] ?? "0"),
+        })),
+        lineItems,
+      };
+      checkoutSessions.set(id, session);
+      if (idempotencyKey) idempotencyResponses.set(idempotencyKey, session);
+      return HttpResponse.json(session);
+    },
+  ),
 );
 
 // Test-only helper: seed a pre-existing Price as if an earlier sync run
@@ -139,8 +234,13 @@ export function getStripeFakePrices(): FakePrice[] {
   return [...prices.values()];
 }
 
+export function getStripeFakeCheckoutSessions(): FakeCheckoutSession[] {
+  return [...checkoutSessions.values()];
+}
+
 export function resetStripeFakeState(): void {
   products.clear();
   prices.clear();
+  checkoutSessions.clear();
   idempotencyResponses.clear();
 }

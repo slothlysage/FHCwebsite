@@ -4,6 +4,7 @@ import { readCartId } from "@/lib/cart-cookie";
 import { formatPriceCents } from "@/lib/format";
 import { getCartSummary, type CartSummary } from "@/lib/services/cart";
 import { removeCartItemAction, updateCartItemAction } from "@/lib/actions/cart";
+import { createCheckoutSessionAction } from "@/lib/actions/checkout";
 
 // Reads cookies() (via readCartId) — Next opts this route into dynamic
 // rendering for that reason alone, but the explicit export documents intent
@@ -28,14 +29,52 @@ function adjustmentMessage(
   return `${adjustment.productName} quantity was reduced to ${adjustment.adjustedQuantity} (limited stock).`;
 }
 
-export default async function CartPage() {
+// `checkout_error`'s two values are `createCheckoutSession`'s (3.3)
+// `CreateCheckoutSessionResult["reason"]` — surfaced here rather than left
+// as a silent redirect back to /cart. "empty_cart" only round-trips if the
+// cart emptied between this page rendering and the button being clicked
+// (e.g. a second tab); "unavailable" means a cart line's variant hasn't
+// been synced to Stripe yet (specs/05-payments.md's "Implementation notes
+// (3.3)").
+function checkoutErrorMessage(reason: string | undefined): string | null {
+  if (reason === "unavailable") {
+    return "Some items in your cart aren't available for checkout right now. Please try again shortly.";
+  }
+  if (reason === "empty_cart") {
+    return "Your cart emptied before checkout could start.";
+  }
+  return null;
+}
+
+export default async function CartPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ checkout_error?: string }>;
+}) {
   const summary = await loadCartSummary();
+  const { checkout_error: checkoutError } = await searchParams;
+  const checkoutErrorText = checkoutErrorMessage(checkoutError);
+  // Fresh per render, embedded in the checkout form below: two submits of
+  // the same rendered page (e.g. a double-click) reuse this value and so
+  // resolve to the same Stripe idempotency key, but a reload or a return
+  // trip from a cancelled session gets a new one (specs/05-payments.md's
+  // "Implementation notes (3.3)").
+  const checkoutNonce = crypto.randomUUID();
 
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-10 sm:px-6">
       <h1 className="text-2xl font-semibold tracking-tight text-ink">
         Your cart
       </h1>
+
+      {checkoutErrorText && (
+        <p
+          role="alert"
+          className="mt-4 rounded-md border border-clay-dark/30 bg-clay/10 p-3 text-sm text-ink"
+        >
+          {checkoutErrorText}
+        </p>
+      )}
 
       {summary.adjustments.length > 0 && (
         <ul
@@ -139,6 +178,19 @@ export default async function CartPage() {
             <span>Subtotal</span>
             <span>{formatPriceCents(summary.subtotalCents)}</span>
           </div>
+
+          <form
+            action={createCheckoutSessionAction}
+            className="mt-6 flex justify-end"
+          >
+            <input type="hidden" name="nonce" value={checkoutNonce} />
+            <button
+              type="submit"
+              className="rounded-md bg-clay px-5 py-2.5 text-sm font-semibold text-white hover:bg-clay-dark"
+            >
+              Checkout
+            </button>
+          </form>
         </>
       )}
     </div>
