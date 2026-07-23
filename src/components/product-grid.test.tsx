@@ -45,6 +45,22 @@ describe("ProductGrid", () => {
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
+  it("shows a custom empty message and a clear-filters action when given one", () => {
+    render(
+      <ProductGrid
+        products={[]}
+        emptyMessage="No products match your filters."
+        emptyAction={<a href="/products">Clear filters</a>}
+      />,
+    );
+    expect(
+      screen.getByText("No products match your filters."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /clear filters/i }),
+    ).toHaveAttribute("href", "/products");
+  });
+
   it("has no axe violations with products", async () => {
     const { container } = render(<ProductGrid products={[makeItem()]} />);
     expect(await axe(container)).toHaveNoViolations();

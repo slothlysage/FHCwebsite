@@ -3,21 +3,32 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { db } from "@/lib/db/client";
 import {
+  categories,
   inventoryMovements,
+  productAttributes,
+  productCategories,
   productImages,
   productVariants,
   products,
 } from "@/lib/db/schema";
+import { setProductAttribute } from "@/lib/repos/attributes";
+import { createCategory, linkProductCategory } from "@/lib/repos/categories";
 import { recordMovement } from "@/lib/repos/inventory";
 import { replaceProductImages } from "@/lib/repos/images";
 import { createProduct } from "@/lib/repos/products";
 import { createVariant, deactivateVariant } from "@/lib/repos/variants";
-import { getPublishedProductListing } from "@/lib/services/product-listing";
+import {
+  getFilteredProductListing,
+  getFilterFacets,
+} from "@/lib/services/product-listing";
+import { parseProductFilters } from "@/lib/validation/product-filters";
+
+const defaultFilters = parseProductFilters({});
 
 // Integration tests against a real Postgres (specs/06-testing.md). Requires
 // DATABASE_URL to point at a migrated database — see AGENT.md's `db:migrate`.
 
-describe("getPublishedProductListing", () => {
+describe("getFilteredProductListing", () => {
   const insertedProductIds: string[] = [];
 
   afterEach(async () => {
@@ -55,7 +66,7 @@ describe("getPublishedProductListing", () => {
     const archived = await makeProduct("test-listing-archived", "archived");
     const published = await makeProduct("test-listing-published");
 
-    const listing = await getPublishedProductListing();
+    const listing = await getFilteredProductListing(defaultFilters);
     const ids = listing.map((item) => item.id);
 
     expect(ids).not.toContain(draft.id);
@@ -93,7 +104,7 @@ describe("getPublishedProductListing", () => {
       reason: "adjustment",
     });
 
-    const listing = await getPublishedProductListing();
+    const listing = await getFilteredProductListing(defaultFilters);
     const item = listing.find((p) => p.id === product.id);
 
     expect(item?.priceFromCents).toBe(1000);
@@ -119,7 +130,7 @@ describe("getPublishedProductListing", () => {
       reason: "sale",
     });
 
-    const listing = await getPublishedProductListing();
+    const listing = await getFilteredProductListing(defaultFilters);
     const item = listing.find((p) => p.id === product.id);
 
     expect(item?.inStock).toBe(false);
@@ -140,7 +151,7 @@ describe("getPublishedProductListing", () => {
       reason: "adjustment",
     });
 
-    const listing = await getPublishedProductListing();
+    const listing = await getFilteredProductListing(defaultFilters);
     const item = listing.find((p) => p.id === product.id);
 
     expect(item?.inStock).toBe(true);
@@ -149,7 +160,7 @@ describe("getPublishedProductListing", () => {
   it("has no price and is out of stock when a product has no active variants", async () => {
     const product = await makeProduct("test-listing-no-variants");
 
-    const listing = await getPublishedProductListing();
+    const listing = await getFilteredProductListing(defaultFilters);
     const item = listing.find((p) => p.id === product.id);
 
     expect(item?.priceFromCents).toBeNull();
@@ -176,7 +187,7 @@ describe("getPublishedProductListing", () => {
       },
     ]);
 
-    const listing = await getPublishedProductListing();
+    const listing = await getFilteredProductListing(defaultFilters);
     const withImageItem = listing.find((p) => p.id === withImage.id);
     const withoutImageItem = listing.find((p) => p.id === withoutImage.id);
 
@@ -185,5 +196,75 @@ describe("getPublishedProductListing", () => {
       altText: "First",
     });
     expect(withoutImageItem?.image).toBeNull();
+  });
+
+  it("applies the passed-in filters (2.3), not just the default unfiltered set", async () => {
+    const category = await createCategory({
+      slug: "test-listing-service-filter-category",
+      name: "Filter Category",
+    });
+    const inCategory = await makeProduct("test-listing-service-filter-in");
+    const outOfCategory = await makeProduct("test-listing-service-filter-out");
+    await linkProductCategory(inCategory.id, category.id);
+
+    const listing = await getFilteredProductListing({
+      ...defaultFilters,
+      categorySlugs: [category.slug],
+    });
+    const ids = listing.map((item) => item.id);
+
+    expect(ids).toContain(inCategory.id);
+    expect(ids).not.toContain(outOfCategory.id);
+
+    await db
+      .delete(productCategories)
+      .where(eq(productCategories.productId, inCategory.id));
+    await db.delete(categories).where(eq(categories.id, category.id));
+  });
+});
+
+describe("getFilterFacets", () => {
+  const insertedProductIds: string[] = [];
+  const insertedCategoryIds: string[] = [];
+
+  afterEach(async () => {
+    for (const productId of insertedProductIds.splice(0)) {
+      await db
+        .delete(productAttributes)
+        .where(eq(productAttributes.productId, productId));
+      await db
+        .delete(productCategories)
+        .where(eq(productCategories.productId, productId));
+      await db.delete(products).where(eq(products.id, productId));
+    }
+    for (const categoryId of insertedCategoryIds.splice(0)) {
+      await db.delete(categories).where(eq(categories.id, categoryId));
+    }
+  });
+
+  it("returns categories, scents, and sizes available on published products", async () => {
+    const product = await createProduct({
+      slug: "test-facets-product",
+      name: "Facets Product",
+      status: "published",
+    });
+    insertedProductIds.push(product.id);
+    const category = await createCategory({
+      slug: "test-facets-category",
+      name: "Facets Category",
+    });
+    insertedCategoryIds.push(category.id);
+    await linkProductCategory(product.id, category.id);
+    await setProductAttribute(product.id, "scent", "test-facets-lavender");
+    await setProductAttribute(product.id, "size", "test-facets-8oz");
+
+    const facets = await getFilterFacets();
+
+    expect(facets.categories).toContainEqual({
+      slug: category.slug,
+      name: category.name,
+    });
+    expect(facets.scents).toContain("test-facets-lavender");
+    expect(facets.sizes).toContain("test-facets-8oz");
   });
 });

@@ -576,7 +576,7 @@ aria-label="Main">` with Shop/About/Contact, a `/cart` link whose
       AC met for the "renders at 360/768/1440 with no horizontal scroll" half
       via a real browser, not jsdom (jsdom has no layout engine to assert
       against): installed Playwright's Chromium (`npx playwright install
-  chromium`; `--with-deps` failed, no passwordless sudo in this sandbox,
+chromium`; `--with-deps` failed, no passwordless sudo in this sandbox,
       but the browser-only download didn't need it), ran the dev server, and
       measured `document.documentElement.scrollWidth` vs `clientWidth` at all
       three widths — equal (no overflow) at each, screenshots visually
@@ -673,16 +673,140 @@ catalog.csv --apply` (all rows import as `draft` by default), published
       links to `/products/[slug]` paths that 404 today — expected, that's
       2.5's job.
 
-- [ ] **2.3 Sort and filter**
+- [x] **2.3 Sort and filter**
       Deps: 2.2. See `specs/03-storefront.md`.
-      Filters: category, scent, price range, in-stock-only.
-      Sorts: newest, price asc/desc, name A–Z.
-      **State lives in the URL query string** and filtering happens in SQL, not in
-      the browser. Filter state must survive a page reload and be shareable.
-      AC: `?category=candles&sort=price_asc&inStock=true` returns exactly the right
-      set in the right order; combined filters AND together; unknown params are
-      ignored rather than erroring; empty result shows a "no matches, clear filters"
-      state. Tests cover each filter alone, two combined, and the empty case.
+      New `src/lib/validation/product-filters.ts` — the first module in
+      `src/lib/validation/` (named in AGENT.md's layout but unused until
+      now). `parseProductFilters(raw)` turns Next's `searchParams` object
+      into a fully-defaulted `ProductFilters`, permissively: unknown keys
+      ignored, non-numeric/negative prices ignored, unknown `sort` falls
+      back to `"newest"`, a repeated single-value param (e.g. two `sort`s)
+      takes the first. `inStockOnly` is presence-only per the spec's Notes
+      column — `?inStock=false` still counts as "on" because the UI only
+      ever omits the param or sends `inStock=true`, it never sends
+      `false`. `filtersToSearchParams(filters)` is the inverse — canonical
+      query-string round-trip, used to build chip-removal/clear-filters
+      links without any hand-assembled query strings.
+      `src/lib/repos/products.ts`'s new `listPublishedProductsFiltered(filters)`
+      does the actual SQL: one query, `products` LEFT JOIN a per-product
+      aggregate subquery over active variants (`min(price_cents)` +
+      `bool_or(stock > 0)`, the latter joined through the existing
+      `variant_stock` view) for price-from/in-stock, plus one `EXISTS`
+      condition per active facet (category via `product_categories` join,
+      scent/size via `product_attributes` key/value) so different facets
+      AND together (separate conditions) while values within one facet OR
+      together (`inArray` inside a single EXISTS). Price range is
+      deliberately **not** filtered against the aggregated minimum — a
+      separate EXISTS on `product_variants` checks whether _any_ active
+      variant's price falls in `[min, max]`, because a multi-variant
+      product can have one variant in range and a cheaper one outside it
+      (spec: "matches if any variant falls in the range"). This also means
+      `minPrice > maxPrice` needs no special-cased branch: no variant can
+      satisfy both bounds at once, so it naturally yields zero rows, not
+      an error. Sort is `price_asc`/`price_desc` (on the aggregated
+      min-price column) / `name_asc` / `newest` (default), always
+      tie-broken on `products.id` for stable pagination ahead of 2.4.
+      Two new repo helpers feed the filter UI's facet options, both scoped
+      to published/non-deleted products so an empty facet never renders as
+      a selectable-but-empty checkbox: `categories.ts`'s
+      `listFilterableCategories()` and a new `src/lib/repos/attributes.ts`
+      (`setProductAttribute`, `listFilterableAttributeValues(key)`) — the
+      first repo module for `product_attributes`, which had none before
+      this task.
+      `product-listing.ts` service: replaced `getPublishedProductListing()`
+      with `getFilteredProductListing(filters: ProductFilters)` (same
+      two-query shape as before — filtered/sorted products, then one batch
+      image lookup — collapsed from three queries since price-from/in-stock
+      are now computed in the repo's SQL instead of a second batch call)
+      plus a new `getFilterFacets()` (categories/scents/sizes in parallel).
+      This is an extension of the existing 2.2 function per the loop's own
+      "search before creating a sibling" rule, not a parallel
+      implementation — the default-filters case (`parseProductFilters({})`)
+      reproduces the old unfiltered/newest-first behavior exactly, and all
+      of 2.2's existing service/page tests were migrated to call the new
+      function rather than duplicated.
+      UI: new `src/components/product-filters-form.tsx` — a plain
+      `method="GET" action="/products"` `<form>`, no client JS at all.
+      Checking a facet checkbox or clicking "Apply filters" is an ordinary
+      browser navigation to a new query string, which is what makes filter
+      state live entirely in the URL and keeps working with JS disabled.
+      Wrapped in `<details open>` for the "Filter button with an active
+      count" requirement — free keyboard/screen-reader toggle semantics
+      with zero JS. Active filters render as removable chips (each an
+      `<a>` to the current filter set minus that one value, computed via
+      `filtersToSearchParams`) plus a "Clear all" link to `/products`.
+      `products/page.tsx` now takes `searchParams: Promise<RawSearchParams>`
+      (Next 15+'s async page props), parses it once, and passes the same
+      `filters` object to both the form (to pre-check/pre-fill controls)
+      and the service. `ProductGrid` gained optional `emptyMessage`/
+      `emptyAction` props so the page can show "No products match your
+      filters." + a working "Clear filters" link when filters produced zero
+      results, vs. the generic "check back soon" message for a genuinely
+      empty catalog — same component, two empty states, per the spec's
+      distinct empty-state requirement.
+      Tests: `product-filters.test.ts` (17 unit tests — defaults, single
+      and repeated facet values, blank-value dropping, whole/fractional
+      price parsing, invalid/negative price ignored, `inStock` presence
+      semantics, every sort value plus unknown-sort fallback, unknown
+      params ignored, round-trip serialization); `products.test.ts` gained
+      19 integration tests on `listPublishedProductsFiltered` (draft/
+      archived excluded, category alone, category OR'd across two values,
+      scent alone, size alone, price range matching _any_ variant not just
+      the cheapest, minPrice-only, maxPrice-only, inverted range → empty
+      not an error, in-stock-only, category AND in-stock combined, all
+      four sorts including tie-break-by-id and default, empty-result case,
+      result shape); `attributes.test.ts` (4 new tests) and 1 new test in
+      `categories.test.ts` for the two facet-option repo functions;
+      `product-listing.test.ts` migrated plus 2 new tests (filters actually
+      applied through the service, `getFilterFacets` shape);
+      `product-filters-form.test.tsx` (11 RTL + axe tests: GET-form
+      attributes, checkbox checked-state from current filters, price/
+      in-stock/sort pre-fill, chip rendering and correct removal hrefs for
+      every facet type, price-chip "any" label when only one bound is set,
+      zero axe violations both with and without active filters);
+      `product-grid.test.tsx` gained 1 test for the new empty-state props;
+      `products/page.test.tsx` migrated to the async `searchParams` prop
+      plus 3 new tests (category filter via real query params, filtered
+      empty state with working clear-filters link, unknown param ignored).
+      AC met, verified two ways: the test suite above (179 tests total,
+      `npm run verify` green — 99.46/98.29/100/99.45%
+      stmts/branch/funcs/lines, comfortably over both the 80% global and
+      90% services floors), and a real `next dev` server hit with `curl`
+      against seeded data — full listing showed all 3 seeded products,
+      `?category=<slug>` narrowed to exactly the 2 linked ones, an unknown
+      category slug produced the "No products match your filters." empty
+      state with a working `/products` clear-filters link, and
+      `?utm_source=newsletter` was silently ignored (still showed all 3).
+      Scratch data removed from the dev DB afterward.
+      NOTE — deferred, not part of this AC: the spec's UI section calls for
+      a mobile **bottom sheet** (an overlay) vs. a **desktop sidebar** —
+      two distinct layouts. This task ships one `<details>` disclosure at
+      every viewport width instead (open by default, collapsible via its
+      `<summary>`), because a real bottom-sheet-vs-sidebar split needs
+      either client JS or duplicated markup gated by responsive `hidden`
+      classes (rejected — duplicate `name="category"` inputs across two
+      copies of the same form would double-submit and confuse assistive
+      tech). If the owner wants the literal bottom-sheet interaction later,
+      that's a follow-up task, not a gap in this one's AC (filter
+      correctness, URL state, empty states, and accessibility are all met
+      by the current markup).
+      NOTE for 2.4 (pagination): `page` is in the spec's query-param table
+      but deliberately not parsed by `product-filters.ts` yet — no
+      pagination logic exists to consume it, and an unhandled param is
+      already "ignored" by design. `filtersToSearchParams` is what 2.4
+      should extend (not replace) for building page-link hrefs that
+      preserve the active filters — same rationale as 2.2's NOTE about
+      extending `getPublishedProductListing`'s query shape rather than
+      replacing it, which is exactly what happened here.
+      NOTE for later phases: `product-filters-form.tsx`'s price sort
+      (`price_asc`/`price_desc`) orders by the aggregated `variant_agg.
+priceFromCents`, which is `NULL` for a product with zero active
+      variants. Postgres' default null-ordering (`NULLS LAST` for `ASC`,
+      `NULLS FIRST` for `DESC`) means a no-variant product would jump to
+      the _top_ of a `price_desc` listing — not wrong exactly (there's no
+      real price to sort it by) but worth knowing if it ever looks like a
+      bug in a real catalog with unfinished/variant-less draft-turned-
+      published products.
 
 - [ ] **2.4 Pagination**
       Deps: 2.3. Cursor or offset, consistent with filters.

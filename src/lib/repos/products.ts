@@ -1,7 +1,27 @@
-import { and, desc, eq, isNull } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  exists,
+  gte,
+  inArray,
+  isNull,
+  lte,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 
 import { db, type DbExecutor } from "@/lib/db/client";
-import { products } from "@/lib/db/schema";
+import {
+  categories,
+  productAttributes,
+  productCategories,
+  products,
+  productVariants,
+  variantStock,
+} from "@/lib/db/schema";
+import type { ProductSort } from "@/lib/validation/product-filters";
 
 type Product = typeof products.$inferSelect;
 type NewProduct = typeof products.$inferInsert;
@@ -72,4 +92,170 @@ export async function softDeleteProduct(
     .where(eq(products.id, id))
     .returning();
   return deleted;
+}
+
+export type ProductListFilters = {
+  categorySlugs?: string[];
+  scents?: string[];
+  sizes?: string[];
+  minPriceCents?: number;
+  maxPriceCents?: number;
+  inStockOnly?: boolean;
+  sort?: ProductSort;
+};
+
+export type FilteredProduct = Product & {
+  priceFromCents: number | null;
+  inStock: boolean;
+};
+
+// One EXISTS-per-facet condition: `products.id` matches if the product has
+// at least one product_attributes row for `key` whose value is one of
+// `values` — the OR-within-a-facet half of specs/03-storefront.md's
+// "different facets AND together, values within one facet OR together".
+function attributeValueExists(key: string, values: string[]): SQL {
+  return exists(
+    db
+      .select({ one: sql`1` })
+      .from(productAttributes)
+      .where(
+        and(
+          eq(productAttributes.productId, products.id),
+          eq(productAttributes.key, key),
+          inArray(productAttributes.value, values),
+        ),
+      ),
+  );
+}
+
+// Published, non-deleted products matching every supplied filter (AND across
+// facets, OR within a facet), sorted per `filters.sort`, tie-broken on id so
+// pagination (2.4) stays stable. Filtering happens entirely in this one
+// query — see specs/03-storefront.md: "Filtering happens in SQL... Do not
+// fetch everything and filter in JavaScript."
+export async function listPublishedProductsFiltered(
+  filters: ProductListFilters = {},
+): Promise<FilteredProduct[]> {
+  // Per-product aggregate over active variants: the lowest price (what the
+  // card's "from $X" and price sort use) and whether any active variant has
+  // positive stock. A plain LEFT JOIN subquery, not a second round-trip —
+  // a product with zero active variants gets NULL for both, which the
+  // mapping below turns into `null`/`false`, matching 2.2's contract.
+  const variantAgg = db
+    .select({
+      productId: productVariants.productId,
+      priceFromCents: sql<number>`min(${productVariants.priceCents})`.as(
+        "price_from_cents",
+      ),
+      inStock: sql<boolean>`bool_or(coalesce(${variantStock.stock}, 0) > 0)`.as(
+        "in_stock",
+      ),
+    })
+    .from(productVariants)
+    .leftJoin(variantStock, eq(variantStock.variantId, productVariants.id))
+    .where(eq(productVariants.isActive, true))
+    .groupBy(productVariants.productId)
+    .as("variant_agg");
+
+  const conditions: SQL[] = [
+    eq(products.status, "published"),
+    isNull(products.deletedAt),
+  ];
+
+  if (filters.categorySlugs?.length) {
+    conditions.push(
+      exists(
+        db
+          .select({ one: sql`1` })
+          .from(productCategories)
+          .innerJoin(
+            categories,
+            eq(productCategories.categoryId, categories.id),
+          )
+          .where(
+            and(
+              eq(productCategories.productId, products.id),
+              inArray(categories.slug, filters.categorySlugs),
+            ),
+          ),
+      ),
+    );
+  }
+
+  if (filters.scents?.length) {
+    conditions.push(attributeValueExists("scent", filters.scents));
+  }
+
+  if (filters.sizes?.length) {
+    conditions.push(attributeValueExists("size", filters.sizes));
+  }
+
+  if (
+    filters.minPriceCents !== undefined ||
+    filters.maxPriceCents !== undefined
+  ) {
+    // "Matches if any variant falls in the range" (spec) — deliberately not
+    // filtered against the aggregated minimum price above, since a
+    // multi-variant product can have one variant inside the range and a
+    // cheaper one outside it. A minPrice > maxPrice range can never be
+    // satisfied by any variant, so this naturally produces zero rows
+    // instead of needing a special-cased "invalid range" branch.
+    const priceConditions = [
+      eq(productVariants.productId, products.id),
+      eq(productVariants.isActive, true),
+    ];
+    if (filters.minPriceCents !== undefined) {
+      priceConditions.push(
+        gte(productVariants.priceCents, filters.minPriceCents),
+      );
+    }
+    if (filters.maxPriceCents !== undefined) {
+      priceConditions.push(
+        lte(productVariants.priceCents, filters.maxPriceCents),
+      );
+    }
+    conditions.push(
+      exists(
+        db
+          .select({ one: sql`1` })
+          .from(productVariants)
+          .where(and(...priceConditions)),
+      ),
+    );
+  }
+
+  if (filters.inStockOnly) {
+    conditions.push(eq(variantAgg.inStock, true));
+  }
+
+  const orderBy = (() => {
+    switch (filters.sort) {
+      case "price_asc":
+        return [asc(variantAgg.priceFromCents), asc(products.id)];
+      case "price_desc":
+        return [desc(variantAgg.priceFromCents), asc(products.id)];
+      case "name_asc":
+        return [asc(products.name), asc(products.id)];
+      case "newest":
+      default:
+        return [desc(products.createdAt), asc(products.id)];
+    }
+  })();
+
+  const rows = await db
+    .select({
+      product: products,
+      priceFromCents: variantAgg.priceFromCents,
+      inStock: variantAgg.inStock,
+    })
+    .from(products)
+    .leftJoin(variantAgg, eq(variantAgg.productId, products.id))
+    .where(and(...conditions))
+    .orderBy(...orderBy);
+
+  return rows.map((row) => ({
+    ...row.product,
+    priceFromCents: row.priceFromCents ?? null,
+    inStock: row.inStock ?? false,
+  }));
 }

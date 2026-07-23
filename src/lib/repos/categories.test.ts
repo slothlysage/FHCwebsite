@@ -8,6 +8,7 @@ import {
   createCategory,
   getCategoryBySlug,
   linkProductCategory,
+  listFilterableCategories,
 } from "@/lib/repos/categories";
 
 // Integration tests against a real Postgres (specs/06-testing.md). Requires
@@ -97,5 +98,46 @@ describe("categories repo", () => {
       .from(productCategories)
       .where(eq(productCategories.productId, product.id));
     expect(links).toHaveLength(1);
+  });
+
+  it("lists only categories linked to a published, non-deleted product", async () => {
+    const published = await createProduct({
+      slug: "test-filterable-published",
+      name: "Published",
+      status: "published",
+    });
+    insertedProductIds.push(published.id);
+    const draft = await createProduct({
+      slug: "test-filterable-draft",
+      name: "Draft",
+      status: "draft",
+    });
+    insertedProductIds.push(draft.id);
+
+    const liveCategory = await createCategory({
+      slug: "test-filterable-live",
+      name: "Live Category",
+    });
+    insertedCategoryIds.push(liveCategory.id);
+    const draftOnlyCategory = await createCategory({
+      slug: "test-filterable-draft-only",
+      name: "Draft Only Category",
+    });
+    insertedCategoryIds.push(draftOnlyCategory.id);
+    const unlinkedCategory = await createCategory({
+      slug: "test-filterable-unlinked",
+      name: "Unlinked Category",
+    });
+    insertedCategoryIds.push(unlinkedCategory.id);
+
+    await linkProductCategory(published.id, liveCategory.id);
+    await linkProductCategory(draft.id, draftOnlyCategory.id);
+
+    const filterable = await listFilterableCategories();
+    const slugs = filterable.map((category) => category.slug);
+
+    expect(slugs).toContain(liveCategory.slug);
+    expect(slugs).not.toContain(draftOnlyCategory.slug);
+    expect(slugs).not.toContain(unlinkedCategory.slug);
   });
 });

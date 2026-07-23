@@ -56,6 +56,51 @@ catalog grows and it breaks pagination immediately.
 - Active filters shown as removable chips
 - Filtered listing pages carry `noindex` (see SEO in fix_plan 2.6)
 
+## Implementation notes (2.3 — sort and filter)
+
+- The whole filter/sort query is one SQL statement:
+  `src/lib/repos/products.ts`'s `listPublishedProductsFiltered`. A LEFT JOIN
+  to a per-product aggregate subquery over active variants supplies
+  price-from (`min(price_cents)`) and in-stock (`bool_or(stock > 0)`, via
+  the `variant_stock` view). Each active facet (category/scent/size) is a
+  separate `EXISTS` condition — different facets AND together because
+  they're independent `AND`ed conditions in the same `WHERE`; values within
+  one facet OR together because the `EXISTS` subquery uses `IN (...)` for
+  that facet's whole value list.
+- Price range does **not** filter against the aggregated minimum price. It's
+  its own `EXISTS` over `product_variants` checking whether _any_ active
+  variant's price falls in `[minPriceCents, maxPriceCents]` — required
+  because "matches if any variant falls in the range" (this file, above)
+  is a different question than "is the cheapest variant in range." A
+  `minPrice > maxPrice` range needs no special-cased "invalid, return
+  empty" branch as a result: no variant can satisfy `price >= min AND
+price <= max` when `min > max`, so the `EXISTS` is false for every
+  product and the query naturally returns zero rows.
+- `inStock` is presence-only (see the Notes column above) — the UI's
+  checkbox either sends `inStock=true` or omits the param entirely, never
+  `inStock=false`, so `src/lib/validation/product-filters.ts` treats any
+  presence of the key as true. Don't "fix" this to check the value equals
+  `"true"` without also changing the UI to send `false` explicitly.
+- The filter UI (`src/components/product-filters-form.tsx`) is a plain
+  `method="GET"` `<form>` with no client JS — every control change is a
+  real navigation to a new `/products?...` URL, which is what makes state
+  live in the URL by construction rather than by convention. The spec's
+  "mobile bottom sheet / desktop sidebar" split was **not** implemented as
+  two distinct layouts — a single `<details open>` disclosure is used at
+  every width instead, since a true bottom-sheet overlay needs client JS
+  (or risky duplicated form markup) that wasn't worth the scope increase
+  for this task. See fix_plan.md 2.3's NOTE — this is an open follow-up,
+  not a gap in the current AC.
+- Facet options (which categories/scents/sizes even show up as checkboxes)
+  come from `listFilterableCategories`/`listFilterableAttributeValues`,
+  both scoped to published/non-deleted products — a facet value that only
+  exists on a draft product never renders as a selectable-but-empty
+  checkbox.
+- `page` is in the query-param table above but not yet parsed anywhere —
+  that's 2.4's job. `filtersToSearchParams` (the canonical filter→query-
+  string serializer, used for chip/clear-filters links) is what 2.4 should
+  extend for page-link hrefs, not replace.
+
 ## Product detail
 
 Above the fold: image gallery, name, price (updates with variant), variant

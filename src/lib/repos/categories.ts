@@ -1,7 +1,7 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 
 import { db, type DbExecutor } from "@/lib/db/client";
-import { categories, productCategories } from "@/lib/db/schema";
+import { categories, productCategories, products } from "@/lib/db/schema";
 
 type Category = typeof categories.$inferSelect;
 type NewCategory = typeof categories.$inferInsert;
@@ -39,4 +39,26 @@ export async function linkProductCategory(
     .insert(productCategories)
     .values({ productId, categoryId })
     .onConflictDoNothing();
+}
+
+// Categories linked to at least one published/non-deleted product — this is
+// what populates the storefront filter UI's category checkboxes (2.3), so a
+// category with nothing live in it never shows up as a selectable-but-empty
+// filter.
+export async function listFilterableCategories(): Promise<Category[]> {
+  return db
+    .selectDistinct({
+      id: categories.id,
+      slug: categories.slug,
+      name: categories.name,
+      description: categories.description,
+    })
+    .from(categories)
+    .innerJoin(
+      productCategories,
+      eq(productCategories.categoryId, categories.id),
+    )
+    .innerJoin(products, eq(products.id, productCategories.productId))
+    .where(and(eq(products.status, "published"), isNull(products.deletedAt)))
+    .orderBy(categories.name);
 }
