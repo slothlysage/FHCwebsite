@@ -15,6 +15,7 @@ function makeItem(
     image: null,
     priceFromCents: 2400,
     inStock: true,
+    purchasable: true,
     ...overrides,
   };
 }

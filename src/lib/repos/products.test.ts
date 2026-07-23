@@ -236,7 +236,11 @@ describe("listPublishedProductsFiltered", () => {
     productId: string,
     sku: string,
     priceCents: number,
-    options: { active?: boolean; stock?: number } = {},
+    options: {
+      active?: boolean;
+      stock?: number;
+      allowBackorder?: boolean;
+    } = {},
   ) {
     const variant = await createVariant({
       productId,
@@ -245,6 +249,7 @@ describe("listPublishedProductsFiltered", () => {
       priceCents,
       weightGrams: 100,
       isActive: options.active ?? true,
+      allowBackorder: options.allowBackorder ?? true,
     });
     if (options.stock !== undefined) {
       await recordMovement({
@@ -532,6 +537,48 @@ describe("listPublishedProductsFiltered", () => {
 
     expect(item?.priceFromCents).toBe(1234);
     expect(item?.inStock).toBe(true);
+    expect(item?.purchasable).toBe(true);
+  });
+
+  it("marks a zero-stock product purchasable when its variant allows backorders, but not in stock", async () => {
+    const madeToOrder = await makeProduct("test-filter-made-to-order");
+    await makeVariant(madeToOrder.id, "TEST-FILTER-MTO", 1000, {
+      stock: 0,
+      allowBackorder: true,
+    });
+    const noBackorder = await makeProduct("test-filter-no-backorder");
+    await makeVariant(noBackorder.id, "TEST-FILTER-NO-BO", 1000, {
+      stock: 0,
+      allowBackorder: false,
+    });
+
+    const result = await listPublishedProductsFiltered();
+    const mto = result.find((p) => p.id === madeToOrder.id);
+    const noBo = result.find((p) => p.id === noBackorder.id);
+
+    expect(mto?.inStock).toBe(false);
+    expect(mto?.purchasable).toBe(true);
+    expect(noBo?.inStock).toBe(false);
+    expect(noBo?.purchasable).toBe(false);
+  });
+
+  it("keeps the in-stock-only filter literal: a made-to-order zero-stock product is excluded", async () => {
+    const stocked = await makeProduct("test-filter-literal-stocked");
+    await makeVariant(stocked.id, "TEST-FILTER-LIT-STOCKED", 1000, {
+      stock: 2,
+      allowBackorder: false,
+    });
+    const madeToOrder = await makeProduct("test-filter-literal-mto");
+    await makeVariant(madeToOrder.id, "TEST-FILTER-LIT-MTO", 1000, {
+      stock: 0,
+      allowBackorder: true,
+    });
+
+    const result = await listPublishedProductsFiltered({ inStockOnly: true });
+    const ids = result.map((p) => p.id);
+
+    expect(ids).toContain(stocked.id);
+    expect(ids).not.toContain(madeToOrder.id);
   });
 
   it("paginates with LIMIT/OFFSET, tie-broken by id so pages neither drop nor duplicate items when sorting on a non-unique key", async () => {

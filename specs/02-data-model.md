@@ -16,10 +16,17 @@ time, not at insert time.
 
 `id, product_id → products, sku (unique), name (e.g. "8oz — Lavender"),
 price_cents, compare_at_price_cents (nullable), weight_grams, position,
-stripe_price_id (nullable), is_active`
+stripe_price_id (nullable), is_active, allow_backorder (default true)`
 
 Every product has at least one variant, even single-option products. This avoids
 a whole class of "does this product have variants?" branching.
+
+`allow_backorder` (added 2026-07-22): when true the variant stays purchasable
+at zero or negative stock — the shop currently has no inventory and produces
+to order, so it defaults on. Stock going negative is legal; the movements
+ledger records the true position. The storefront shows such variants as
+"Made to order" rather than "Out of stock", and the "In stock only" filter
+stays literal (a made-to-order, zero-stock product does not match it).
 
 ## product_images
 
@@ -59,10 +66,16 @@ created_at, paid_at, fulfilled_at`
 
 `id, order_id, variant_id (nullable — variant may later be deleted),
 product_name_snapshot, variant_name_snapshot, sku_snapshot,
-unit_price_cents, quantity, line_total_cents`
+unit_price_cents, quantity, line_total_cents, oversold_quantity (default 0)`
 
 Snapshot the names and prices. An order must remain readable years after the
 product is renamed or deleted. This is why `variant_id` is nullable.
+
+`oversold_quantity` (added 2026-07-22): how many of `quantity` exceeded
+on-hand stock at the moment the order was placed — the made-to-order/backorder
+portion of the line. Checkout (phase 3) must compute it as
+`max(0, quantity - available_stock)` at inventory-decrement time. 0 means the
+line was fully covered by stock.
 
 ## addresses
 

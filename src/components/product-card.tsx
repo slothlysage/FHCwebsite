@@ -28,7 +28,10 @@ export function ProductCard({ product }: { product: ProductListingItem }) {
           {product.priceFromCents !== null && (
             <span>From {formatPriceCents(product.priceFromCents)}</span>
           )}
-          {!product.inStock && (
+          {!product.inStock && product.purchasable && (
+            <span className="text-ink/60">Made to order</span>
+          )}
+          {!product.inStock && !product.purchasable && (
             <span className="text-clay-dark font-medium">Out of stock</span>
           )}
         </div>

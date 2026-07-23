@@ -86,6 +86,12 @@ export const productVariants = pgTable(
     position: integer("position").notNull().default(0),
     stripePriceId: text("stripe_price_id"),
     isActive: boolean("is_active").notNull().default(true),
+    // Made-to-order: when true the variant stays purchasable at zero (or
+    // negative) stock — the shop currently has no supply and produces to
+    // order, so this defaults on. Stock going negative is fine: the
+    // inventory ledger records the true position, and order_items.
+    // oversold_quantity tracks how much of each sale was beyond on-hand.
+    allowBackorder: boolean("allow_backorder").notNull().default(true),
   },
   (table) => [
     index("product_variants_product_id_idx").on(table.productId),
@@ -278,6 +284,11 @@ export const orderItems = pgTable("order_items", {
   unitPriceCents: integer("unit_price_cents").notNull(),
   quantity: integer("quantity").notNull(),
   lineTotalCents: integer("line_total_cents").notNull(),
+  // How many of `quantity` exceeded on-hand stock when the order was placed
+  // (made-to-order/backorder sales). 0 = fully covered by stock. Checkout
+  // (phase 3) computes this as max(0, quantity - available) at decrement
+  // time; it exists now so oversold orders are trackable from the first sale.
+  oversoldQuantity: integer("oversold_quantity").notNull().default(0),
 });
 
 export const sessions = pgTable("sessions", {

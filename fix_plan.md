@@ -566,7 +566,7 @@ import.test.ts` (5 integration tests against the real dev
       status-only change reports and applies `update`) — all confirmed red
       first (`status` undefined / action `unchanged`) before implementing.
       AC met, verified live: re-ran `npm run import-catalog --
-  tests/fixtures/catalog.csv --apply` — all 5 products diffed `[update]`
+tests/fixtures/catalog.csv --apply` — all 5 products diffed `[update]`
       and flipped to `published` (psql-confirmed), and a real `next dev` +
       `curl /products` rendered all 5 product cards (each "Out of stock" —
       correct, the CSV has no `Variant Inventory Qty` column, so initial
@@ -595,6 +595,34 @@ import.test.ts` (5 integration tests against the real dev
       filter form lists a Scent facet with the 9 real scents and a
       category facet with the 4 product types; re-import stays idempotent
       (no duplicate attribute/category rows).
+
+- [x] **1.7 Made-to-order / oversell support** (owner request, 2026-07-22)
+      Deps: 1.3. The shop has no supply yet and wants to sell anyway,
+      producing to order — sold-out products stay published and purchasable.
+      Two additive columns (migration `0001_mixed_molly_hayes.sql`, applied
+      to local dev; expand/contract-safe): `product_variants.allow_backorder`
+      (boolean NOT NULL default **true** — everything is made-to-order until
+      the owner turns it off per variant) and `order_items.oversold_quantity`
+      (integer NOT NULL default 0 — how much of the line exceeded on-hand
+      stock at order time; checkout (3.5) must compute
+      `max(0, quantity - available)` when it decrements inventory).
+      `listPublishedProductsFiltered` gained a `purchasable` aggregate
+      (`bool_or(stock > 0 OR allow_backorder)`) alongside the untouched
+      literal `inStock`; `ProductListingItem`/`ProductDetailVariant` carry
+      `purchasable`/`allowBackorder` through. UI: card + variant selector
+      show **"Made to order"** (neutral styling) for zero-stock backorderable
+      items, "Out of stock" only when backorder is off; the "In stock only"
+      filter stays literal (made-to-order ≠ in stock) — decided so the label
+      never lies; revisit if the owner wants it to mean "available to buy".
+      Tests: 2 new repo integration cases (purchasable vs inStock,
+      literal filter), service passthrough assertions, 1 orders-repo case
+      (oversold_quantity persists; default 0 asserted in the existing create
+      test), 2 card + 1 selector RTL cases. `specs/02-data-model.md` updated.
+      `npm run verify` green: 30 files, 255 tests, 98.95% coverage, build ok.
+      NOTE for 3.4/3.5 (checkout): purchasability gate = stock > 0 OR
+      allow_backorder; a sale may drive ledger stock negative — that's legal
+      now. Order confirmation email (3.7) should probably tell the customer
+      the item is made to order — decide lead-time copy with the owner.
 
 ---
 
@@ -1367,6 +1395,45 @@ type="application/ld+json">` with schema.org `Product` (name,
 ---
 
 ## Phase 6 — Launch
+
+- [x] **6.0 Cloudflare Workers adapter wiring** (pulled ahead 2026-07-22 —
+      owner connected the git repo to a Cloudflare account and started the
+      Workers Builds setup, so the repo needed to be deployable now; the
+      full staging AC still belongs to 6.1)
+      `@opennextjs/cloudflare@1.20.2` (dependency; peer-supports Next
+      16.2.11 exactly) + `wrangler@4.113.0` (dev) + `@neondatabase/serverless`.
+      New `wrangler.jsonc` (worker name `fhcwebsite`, `nodejs_compat`,
+      assets binding, WORKER_SELF_REFERENCE, observability),
+      `open-next.config.ts` (defaults — no ISR cache, catalog routes are
+      force-dynamic), `initOpenNextCloudflareForDev()` in `next.config.ts`,
+      `preview`/`deploy` npm scripts, `.dev.vars*` gitignored.
+      `src/lib/db/client.ts` now picks its driver at module load: on workerd
+      (`navigator.userAgent === "Cloudflare-Workers"`) it uses Neon's
+      serverless **HTTP** driver (stateless fetch per query — Workers can't
+      hold TCP/pg sockets across requests); everywhere else (dev, tests,
+      CLI scripts, CI) the existing `pg` Pool. CAVEAT recorded in the file:
+      neon-http has no interactive `db.transaction` — fine while all
+      Workers-side DB paths are reads; 3.5's order-creation transaction must
+      use a per-request WebSocket Pool from `@neondatabase/serverless`.
+      GOTCHA (cost an hour): `opennextjs-cloudflare build` failed on
+      `Could not resolve "pg-cloudflare"` — Next's output tracing resolves
+      pg's optional shim through the exports `default` condition (an empty
+      stub) so `dist/index.js` never lands in the traced node_modules, but
+      OpenNext's esbuild resolves under the `workerd` condition and wants
+      the real file. Fixed with `outputFileTracingIncludes` pinning
+      `node_modules/pg-cloudflare/{dist,esm}/**` into every route's trace.
+      Verified: `npx opennextjs-cloudflare build` produces
+      `.open-next/worker.js` cleanly; full `npm run verify` green.
+      NOT verified here: `wrangler dev`/`deploy` from this sandbox —
+      wrangler 4 requires Node ≥22, sandbox has 20.15. Cloudflare's build
+      image runs Node 22+, so dashboard-driven builds are unaffected.
+      Dashboard config (owner performed): build command
+      `npx opennextjs-cloudflare build`, deploy command
+      `npx opennextjs-cloudflare deploy`, env vars per `.env.example`
+      (DATABASE_URL → Neon pooled URL, Stripe TEST keys, NEXT_PUBLIC_* at
+      build time, ALLOW_LIVE=false). Migrations against Neon run manually
+      (`DATABASE_URL=<neon> npm run db:migrate`) until a deploy-step
+      migration job exists (08-deploy-ops pipeline).
 
 - [ ] **6.1 Staging deploy**
       Deps: 5.5. Cloudflare Workers + Neon, still Stripe test mode.

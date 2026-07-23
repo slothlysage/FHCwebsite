@@ -143,6 +143,9 @@ describe("getProductDetail", () => {
       priceCents: 2400,
       weightGrams: 227,
       stock: 5,
+      // Schema default — the shop produces to order, so variants are
+      // backorderable unless explicitly turned off.
+      allowBackorder: true,
     });
     expect(detail?.attributes).toEqual({
       scent: ["lavender"],

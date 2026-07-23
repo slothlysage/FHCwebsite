@@ -14,6 +14,9 @@ export type ProductListingItem = {
   image: { url: string; altText: string } | null;
   priceFromCents: number | null;
   inStock: boolean;
+  // Sellable even at zero stock (made-to-order) — drives the card's
+  // "Made to order" vs "Out of stock" label.
+  purchasable: boolean;
 };
 
 export type ProductListingPage = {
@@ -73,6 +76,7 @@ export async function getFilteredProductListing(
       image: image ? { url: image.url, altText: image.altText } : null,
       priceFromCents: product.priceFromCents,
       inStock: product.inStock,
+      purchasable: product.purchasable,
     };
   });
   return { items, hasNextPage };

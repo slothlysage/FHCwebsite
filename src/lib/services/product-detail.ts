@@ -12,6 +12,9 @@ export type ProductDetailVariant = {
   compareAtPriceCents: number | null;
   weightGrams: number;
   stock: number;
+  // Sellable at zero stock (made-to-order) — the selector shows
+  // "Made to order" instead of "Out of stock" when this is set.
+  allowBackorder: boolean;
 };
 
 export type ProductDetail = {
@@ -79,6 +82,7 @@ export async function getProductDetail(
         compareAtPriceCents: variant.compareAtPriceCents,
         weightGrams: variant.weightGrams,
         stock: stockByVariant.get(variant.id) ?? 0,
+        allowBackorder: variant.allowBackorder,
       })),
     attributes,
   };

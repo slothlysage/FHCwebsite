@@ -51,12 +51,16 @@ export function VariantSelector({
       <p
         aria-live="polite"
         className={
-          selected.stock > 0
+          selected.stock > 0 || selected.allowBackorder
             ? "mt-1 text-sm text-ink/70"
             : "mt-1 text-sm font-medium text-clay-dark"
         }
       >
-        {selected.stock > 0 ? "In stock" : "Out of stock"}
+        {selected.stock > 0
+          ? "In stock"
+          : selected.allowBackorder
+            ? "Made to order"
+            : "Out of stock"}
       </p>
       <p className="mt-1 text-xs text-ink/50">
         Ships at {selected.weightGrams}g

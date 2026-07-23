@@ -61,6 +61,33 @@ describe("orders repo", () => {
       .where(eq(orderItems.orderId, order.id));
     expect(items).toHaveLength(1);
     expect(items[0]?.skuSnapshot).toBe("LAV-8OZ");
+    // Not passed above — the column's default marks the line as fully
+    // covered by stock unless checkout says otherwise.
+    expect(items[0]?.oversoldQuantity).toBe(0);
+  });
+
+  it("persists an item's oversold quantity for made-to-order sales", async () => {
+    const stripeSessionId = `cs_test_${randomUUID()}`;
+    const order = await createOrder(baseOrder(stripeSessionId), [
+      {
+        variantId: null,
+        productNameSnapshot: "Lavender Candle",
+        variantNameSnapshot: "8oz",
+        skuSnapshot: "LAV-8OZ-OVERSOLD",
+        unitPriceCents: 2000,
+        quantity: 3,
+        lineTotalCents: 6000,
+        // 3 ordered, 1 on hand → 2 produced to order.
+        oversoldQuantity: 2,
+      },
+    ]);
+    insertedOrderIds.push(order.id);
+
+    const items = await db
+      .select()
+      .from(orderItems)
+      .where(eq(orderItems.orderId, order.id));
+    expect(items[0]?.oversoldQuantity).toBe(2);
   });
 
   it("rolls back the order and items when an item insert fails", async () => {

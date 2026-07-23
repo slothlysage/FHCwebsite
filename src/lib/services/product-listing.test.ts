@@ -137,6 +137,9 @@ describe("getFilteredProductListing", () => {
     const item = listing.find((p) => p.id === product.id);
 
     expect(item?.inStock).toBe(false);
+    // Zero stock but allow_backorder defaults true — still purchasable
+    // (made to order), which is what the card's label switches on.
+    expect(item?.purchasable).toBe(true);
   });
 
   it("marks a product in stock when an active variant has positive stock", async () => {
@@ -168,6 +171,7 @@ describe("getFilteredProductListing", () => {
 
     expect(item?.priceFromCents).toBeNull();
     expect(item?.inStock).toBe(false);
+    expect(item?.purchasable).toBe(false);
   });
 
   it("includes the lowest-position image, or null when a product has none", async () => {

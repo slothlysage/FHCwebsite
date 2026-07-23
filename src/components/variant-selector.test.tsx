@@ -15,6 +15,7 @@ const variants: ProductDetailVariant[] = [
     compareAtPriceCents: null,
     weightGrams: 227,
     stock: 5,
+    allowBackorder: true,
   },
   {
     id: "2",
@@ -24,6 +25,17 @@ const variants: ProductDetailVariant[] = [
     compareAtPriceCents: null,
     weightGrams: 454,
     stock: 0,
+    allowBackorder: false,
+  },
+  {
+    id: "3",
+    sku: "sku-c",
+    name: "32oz",
+    priceCents: 6000,
+    compareAtPriceCents: null,
+    weightGrams: 908,
+    stock: 0,
+    allowBackorder: true,
   },
 ];
 
@@ -41,7 +53,7 @@ describe("VariantSelector", () => {
     expect(screen.getByText(/in stock/i)).toBeInTheDocument();
   });
 
-  it("shows out of stock for a variant with zero stock", () => {
+  it("shows out of stock for a zero-stock variant that disallows backorders", () => {
     render(
       <VariantSelector
         variants={variants}
@@ -52,6 +64,20 @@ describe("VariantSelector", () => {
 
     expect(screen.getByText("$40.00")).toBeInTheDocument();
     expect(screen.getByText(/out of stock/i)).toBeInTheDocument();
+  });
+
+  it("shows made to order for a zero-stock variant that allows backorders", () => {
+    render(
+      <VariantSelector
+        variants={variants}
+        initialSku="sku-c"
+        productSlug="lavender-candle"
+      />,
+    );
+
+    expect(screen.getByText("$60.00")).toBeInTheDocument();
+    expect(screen.getByText(/made to order/i)).toBeInTheDocument();
+    expect(screen.queryByText(/out of stock/i)).not.toBeInTheDocument();
   });
 
   it("updates price, stock, and the URL when a different variant is selected, without a full reload", async () => {

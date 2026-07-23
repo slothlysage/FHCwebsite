@@ -17,6 +17,7 @@ function makeItem(
     },
     priceFromCents: 2400,
     inStock: true,
+    purchasable: true,
     ...overrides,
   };
 }
@@ -52,14 +53,28 @@ describe("ProductCard", () => {
     expect(screen.queryByText(/from \$/i)).not.toBeInTheDocument();
   });
 
-  it("shows an out-of-stock label when the product is out of stock", () => {
-    render(<ProductCard product={makeItem({ inStock: false })} />);
+  it("shows an out-of-stock label when out of stock and not purchasable", () => {
+    render(
+      <ProductCard
+        product={makeItem({ inStock: false, purchasable: false })}
+      />,
+    );
     expect(screen.getByText(/out of stock/i)).toBeInTheDocument();
+    expect(screen.queryByText(/made to order/i)).not.toBeInTheDocument();
   });
 
-  it("does not show an out-of-stock label when in stock", () => {
+  it("shows a made-to-order label when out of stock but still purchasable", () => {
+    render(
+      <ProductCard product={makeItem({ inStock: false, purchasable: true })} />,
+    );
+    expect(screen.getByText(/made to order/i)).toBeInTheDocument();
+    expect(screen.queryByText(/out of stock/i)).not.toBeInTheDocument();
+  });
+
+  it("shows neither label when in stock", () => {
     render(<ProductCard product={makeItem({ inStock: true })} />);
     expect(screen.queryByText(/out of stock/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/made to order/i)).not.toBeInTheDocument();
   });
 
   it("has no axe violations", async () => {

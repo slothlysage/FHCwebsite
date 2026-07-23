@@ -117,6 +117,10 @@ export type ProductListFilters = {
 export type FilteredProduct = Product & {
   priceFromCents: number | null;
   inStock: boolean;
+  // Purchasable = any active variant with stock OR allow_backorder — a
+  // made-to-order product is sellable at zero stock without counting as
+  // "in stock" (the badge and the "In stock only" filter stay literal).
+  purchasable: boolean;
 };
 
 // One EXISTS-per-facet condition: `products.id` matches if the product has
@@ -160,6 +164,10 @@ export async function listPublishedProductsFiltered(
       inStock: sql<boolean>`bool_or(coalesce(${variantStock.stock}, 0) > 0)`.as(
         "in_stock",
       ),
+      purchasable:
+        sql<boolean>`bool_or(coalesce(${variantStock.stock}, 0) > 0 or ${productVariants.allowBackorder})`.as(
+          "purchasable",
+        ),
     })
     .from(productVariants)
     .leftJoin(variantStock, eq(variantStock.variantId, productVariants.id))
@@ -257,6 +265,7 @@ export async function listPublishedProductsFiltered(
       product: products,
       priceFromCents: variantAgg.priceFromCents,
       inStock: variantAgg.inStock,
+      purchasable: variantAgg.purchasable,
     })
     .from(products)
     .leftJoin(variantAgg, eq(variantAgg.productId, products.id))
@@ -272,5 +281,6 @@ export async function listPublishedProductsFiltered(
     ...row.product,
     priceFromCents: row.priceFromCents ?? null,
     inStock: row.inStock ?? false,
+    purchasable: row.purchasable ?? false,
   }));
 }
