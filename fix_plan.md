@@ -2433,38 +2433,37 @@ _(agent appends here; do not guess around a blocker)_
   (5 products / 45 variants, zero row errors) after a `db:reset` cleared
   stale rows from an older fixture. See 1.4b's closed gate note and new
   task 1.5.
-- **51 stray real Stripe test-mode Products/Prices from a 3.2b debugging
-  incident (2026-07-23), owner decision needed.** While building/testing
-  `runStripeSync` (`src/lib/services/stripe-catalog-sync.ts`), a msw-mocking
-  bug (see 3.2b's fix_plan entry and `specs/05-payments.md`'s "Implementation
-  notes (3.2b)" for the full trace — the Stripe SDK's `FetchHttpClient`
-  captures `globalThis.fetch` once at import time, before a test's
-  `stripeServer.listen()` had patched it) caused a handful of test runs to
-  silently hit the **real, connected Stripe test-mode account** instead of
-  the mock before it was caught. Confirmed via a live `GetProducts` list
-  call: 51 real Products exist that shouldn't — 45 named after the real
-  catalog (e.g. "8oz Body Butter — Cashmere", `prod_UwIT3RKaIOochd` and
-  siblings, all `created` within the same ~90-second window,
-  `livemode: false`) plus 6 named "Test {create,rerun,archived,replace,
-  noop,missing} — Test Variant" from the test suite's own fixtures. Each has
-  one associated Price. The local dev DB side effect (those same 45 real
-  variants' `stripe_price_id` columns briefly holding fake `price_test_N`
-  ids, overwritten by a later, correctly-mocked run) has already been
-  cleaned up — `update product_variants set stripe_price_id = null where sku
-like 'FC_%';` was run against the local dev DB, confirmed back to the
-  pre-incident state.
-  The 51 real Stripe-side objects were **not** touched — deleting/archiving
-  51 real objects in a real connected external account is exactly the kind
-  of action that needs owner sign-off first, not a unilateral cleanup mid-
-  loop. No financial/live-mode risk (test mode only), but it's real clutter
-  in whatever Stripe account this `.env.local` `STRIPE_SECRET_KEY` is
-  connected to. Options for the owner: (a) ignore — harmless test-mode
-  clutter with no cost, (b) archive/delete via the Stripe Dashboard (test
-  mode toggle → Products, filter by the names above), or (c) ask a future
-  iteration to do it via the Stripe API (`products.update(id, {active:
-false})` per product, since Prices can't be deleted once created, only
-  archived) — needs explicit authorization first per AGENT.md's live-system
-  caution, even for test mode.
+- ~~**51 stray real Stripe test-mode Products/Prices from a 3.2b debugging
+  incident (2026-07-23), owner decision needed.**~~ RESOLVED 2026-07-23:
+  owner authorized option (c) — Stripe API cleanup, archived via
+  `active: false`.
+  Before archiving anything, re-verified which objects were actually stray:
+  the original 51-count assumed the 45 real-catalog-named Products/Prices
+  from the incident were duplicates of a separate, later "real" sync. They
+  weren't. `runStripeSync`'s idempotency keys are derived from
+  `variant.id` (`specs/05-payments.md`'s "Implementation notes (3.2b)",
+  Idempotency design section), so when the owner's 2026-07-23 `npm run
+sync-stripe -- --apply` ran the create step for those same 45 variants, Stripe
+  replayed the exact same idempotency-keyed objects from the incident rather
+  than creating new ones — the incident's 45 catalog-named objects and the
+  "real" sync's output are the same 45 objects. Confirmed by cross-checking
+  every `product_variants.stripe_price_id` in the local dev DB (45 rows)
+  against a live `GetPrices` list: all 45 matched exactly, none missing,
+  none extra. The genuinely orphaned set was 7 objects, not 51 — six of the
+  originally-named "Test {create,rerun,archived,replace,noop,missing} — Test
+  Variant" fixtures plus a second, previously-uncounted "Test create — Test
+  Variant" (`prod_UwIT8Gt9BmIIEB`) from a later test run. All 7 Prices
+  (`price_1TwPtP…`, `…se…`, `…sZ…`, `…sY…`, `…sW…`, `…sU…`, `…sT…`) and their
+  7 parent Products (`prod_UwIUtmR5OmXNlq`, `prod_UwITsKT9casIpc`,
+  `prod_UwITZSjPsPeOcv`, `prod_UwITVoATeWsthX`, `prod_UwITCbBQ0eAwoq`,
+  `prod_UwIT1OFsN107pj`, `prod_UwIT8Gt9BmIIEB`) were set to `active: false`
+  via `PostPricesPrice`/`PostProductsId`. The 45 real-catalog objects were
+  left untouched and re-verified still `active: true` with matching price
+  IDs after the cleanup. No live-mode objects were touched at any point.
+  NOTE for anyone re-deriving this in the future: don't trust a stray-object
+  count written before a later `--apply` run without re-checking against the
+  DB's current `stripe_price_id` values first — idempotency-key replay can
+  silently fold an "incident" object into the "real" one.
 - **Flat shipping rate is a placeholder (3.3).** `checkout.ts`'s
   `FLAT_RATE_SHIPPING_CENTS = 600` ($6.00 US-only) is a made-up number so
   checkout could ship without inventing the shipping-rate admin surface
@@ -2501,12 +2500,37 @@ false})` per product, since Prices can't be deleted once created, only
   isn't integrated until 4.7a, so there's no rate card to read yet). Owner
   should confirm/replace before launch, same category as the flat rate it
   replaced.
-- **Ship-from address and default parcel size, needed for 4.7a**
-  (`specs/09-shipping.md`). Every real Shippo rate quote and label purchase
-  needs the owner's actual return address and the actual box/mailer they
-  ship in (dimensions + packaging weight) — not something to invent a
-  placeholder for the way `FLAT_RATE_SHIPPING_CENTS` was, since a wrong
-  return address ends up printed on a real, paid-for label.
+- ~~**Ship-from address and default parcel size, needed for 4.7a**~~
+  RESOLVED 2026-07-23 (address 2026-07-23, name + parcel 2026-07-23):
+  - **Address**: PO Box, "57280 Yucca Trl, Yucca Valley, CA 92284-7915"
+    (country assumed `US`, not stated). **Name/company: "FHC"** (owner-
+    supplied, use for Shippo's address object `name` or `company` field —
+    no separate person name given, "FHC" covers both).
+  - `SHIPPO_API_TOKEN` already live in `.env.local` (`shippo_test_…`,
+    confirmed test-mode).
+  - **`DEFAULT_PARCEL`**: owner said "the flatrate shipping box size" —
+    i.e. USPS Priority Mail Flat Rate® **Small** Box. Official USPS
+    interior dimensions (store.usps.com, confirmed 2026-07-23): 8-5/8" ×
+    5-3/8" × 1-5/8". Empty-box tare weight was not looked up/confirmed —
+    treat as a few ounces and negligible next to product weight for now;
+    worth a real scale reading before the first purchased label if precision
+    matters.
+  - **Rate-selection policy for `getRatesForOrder`/`purchaseLabel` (4.7a)**:
+    request Shippo rates using `DEFAULT_PARCEL`'s dimensions + the order's
+    real computed weight, then **pick the cheapest rate Shippo returns**,
+    not always the Flat Rate service specifically. Owner's framing: "use
+    pricing that maxes out ... as the cost for a small flat rate box ...
+    and if by that size/weight it's cheaper to send to address use that
+    price instead" — since USPS Flat Rate pricing is fixed regardless of
+    weight/zone (up to 70 lb) by design, it acts as a natural price
+    _ceiling_ for anything that fits the box; other services Shippo returns
+    for the same dimensions (e.g. non-flat-rate Priority, First-Class
+    Package/Ground Advantage) can be cheaper for a light package or a short
+    zone, and should win when they are. This is a real behavioral
+    requirement for 4.7a's rate-selection logic, not just a config value —
+    record it in `specs/09-shipping.md` alongside `DEFAULT_PARCEL`, don't
+    let it get lost as a comment.
+    4.7a is now fully unblocked on config; nothing left in this entry.
 - **No `disputed` order status or owner-notification channel (3.4).**
   `specs/05-payments.md`'s webhook table says `charge.dispute.created`
   should "flag order, notify owner" — `orders.status`'s enum has no

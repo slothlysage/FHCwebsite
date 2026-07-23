@@ -119,6 +119,18 @@ database, and must not guess:
   value only the owner can supply, not something to invent a placeholder
   for the way `FLAT_RATE_SHIPPING_CENTS` was (a wrong return address on a
   real purchased label is a real-world problem, not a cosmetic one).
+  SUPPLIED 2026-07-23 — see `fix_plan.md`'s "Blocked — needs human" entry
+  (now resolved) for the full trace. Real value:
+  ```
+  name/company: FHC
+  street1:      57280 Yucca Trl
+  city:         Yucca Valley
+  state:        CA
+  zip:          92284-7915
+  country:      US   (assumed — not stated by owner)
+  ```
+  It's a PO Box per the owner, so no `street2`/apartment/suite line applies.
+  `SHIPPO_API_TOKEN` is already set in `.env.local` (`shippo_test_…`).
 - **`DEFAULT_PARCEL`** — the box/mailer the owner actually ships in
   (length/width/height + a fixed packaging-overhead weight). v1 assumes one
   default parcel size for every order, no per-order box-picking logic — a
@@ -126,6 +138,11 @@ database, and must not guess:
   bin-packing algorithm. If the owner uses genuinely different box sizes for
   different order weights, that's a v1.5 "pick the smallest parcel that
   fits" enhancement, not a v1 requirement.
+  SUPPLIED 2026-07-23 — owner ships in the USPS Priority Mail Flat Rate®
+  **Small** Box. Official interior dimensions (store.usps.com, confirmed
+  2026-07-23): **8-5/8" × 5-3/8" × 1-5/8"**. Empty-box tare weight was not
+  looked up/confirmed — treat as a few ounces (negligible next to product
+  weight) until someone puts it on a scale; not blocking.
 
 Both live in `src/lib/shipping/config.ts` as plain constants (same pattern
 as `checkout.ts`'s `FLAT_RATE_SHIPPING_CENTS`) until Settings (04-admin.md)
@@ -136,6 +153,21 @@ product_variants.weight_grams)` + `DEFAULT_PARCEL`'s packaging-overhead
 grams. Shippo's parcel object accepts `mass_unit: "g"` directly — no unit
 conversion needed, `weight_grams` (already in the schema, `specs/02-data-model.md`)
 is usable as-is.
+
+**Rate selection ("flat rate as ceiling, cheaper wins") — owner decision,
+2026-07-23.** `getRatesForOrder`/`purchaseLabel` (4.7a) must request Shippo
+rates for `DEFAULT_PARCEL`'s dimensions + the order's real computed weight,
+then **select the cheapest rate Shippo returns**, not hardcode "always use
+the Flat Rate service." Rationale, in the owner's own framing: USPS Flat
+Rate pricing is fixed regardless of weight or destination zone (as long as
+it fits the box, up to 70 lb) — so it's a natural price _ceiling_ for
+anything using this box, not necessarily the cheapest option. Other
+services Shippo returns for the same box dimensions (non-flat-rate
+Priority, First-Class Package, Ground Advantage, etc.) price by actual
+weight/zone and can beat the flat rate for a light item or a nearby
+destination; when one does, use it instead. Concretely: don't filter the
+Shippo rates response down to a single named service before comparing —
+sort all returned options by price and take the minimum.
 
 ## Data model
 
