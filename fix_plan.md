@@ -2000,14 +2000,103 @@ true}` (needs a Stripe Dashboard Tax origin address before a real,
       "Blocked — needs human" below: the $5/$8/$12 numbers are guesses, not
       real Shippo rate-card figures, since Shippo isn't wired up until 4.7a.
 
-- [ ] **3.4 Webhook endpoint**
-      Deps: 3.3. Verify signature. Handle `checkout.session.completed`,
-      `payment_intent.payment_failed`, `charge.refunded`,
-      `charge.dispute.created`.
-      **Idempotent**: persist `event.id` in `webhook_events` and no-op on replay.
-      AC: replaying the same event twice creates exactly one order and decrements
-      inventory once; an invalid signature returns 400 and writes nothing; an
-      unhandled event type returns 200 and is logged. Webhook module ≥90% covered.
+- [x] **3.4 Webhook endpoint**
+      Deps: 3.3. `src/app/api/webhooks/stripe/route.ts` — thin Route Handler:
+      `request.text()` for the raw body (App Router never auto-parses a
+      Route Handler's body — unlike the old Pages Router's `api.bodyParser`,
+      there is nothing to disable), reads the `stripe-signature` header,
+      delegates verification + dispatch to `src/lib/stripe/webhook.ts`, and
+      maps the result to a `Response`: missing/invalid signature → 400
+      before anything is written; otherwise 200 `{received: true}`.
+      `src/lib/stripe/webhook.ts` — `verifyWebhookSignature` (wraps
+      `stripe.webhooks.constructEvent`, pure local HMAC, no network call, so
+      no msw/dynamic-import gotcha the way 3.2b/3.3's Stripe-API-calling
+      code needs) and `handleStripeWebhookEvent`, which inserts `event.id`
+      into `webhook_events` **first** (new `src/lib/repos/webhook-events.ts`
+      — `insertWebhookEvent` via `onConflictDoNothing` + checking
+      `returning().length`, not a hand-caught Postgres unique-violation
+      error) and returns immediately, doing nothing else, if that insert
+      found the id already present — the whole idempotency mechanism, per
+      spec. Only on a fresh id does it dispatch by `event.type`:
+      `checkout.session.completed` → new
+      `src/lib/services/order-fulfillment.ts`'s `fulfillCheckoutSession`;
+      `payment_intent.payment_failed` → log only (no `order_draft_id`
+      exists per 3.3's NOTE, so there's no row to mark unpaid);
+      `charge.refunded` → new `getOrderByStripePaymentIntentId` repo lookup + `updateOrder` to `refunded`/`partially_refunded` depending on the
+      charge object's own `refunded` boolean; `charge.dispute.created` →
+      logs the matched order id (or its absence) — no schema mutation,
+      since no `disputed` order status or owner-notification channel exists
+      (added to "Blocked — needs human" below rather than guessed at);
+      anything else → `console.log` and fall through. Every branch ends by
+      calling `markWebhookEventProcessed`.
+      `fulfillCheckoutSession` (order-fulfillment.ts) re-derives line items
+      from `getCartSummary(session.metadata.cart_id)` — the same source
+      `createCheckoutSession` (3.3) built the original Stripe line items
+      from, keeping the database the one source of truth for catalog
+      identity — but takes money totals (`amount_subtotal`, `amount_total`,
+      `shipping_cost.amount_total`, `total_details.amount_tax/discount`)
+      directly off the Stripe session, since Stripe is the source of truth
+      for payment amounts (AGENT.md), including tax/shipping Stripe itself
+      computed. Creates the order via the existing `orders.createOrder`
+      (already one transaction for order+items), then decrements inventory
+      per line (`recordMovement`, reason `sale`) and empties the cart via a
+      new `deleteCartItemsByCartId` repo function (deletes `cart_items`
+      rows, leaves the `carts` row itself — the `cart_id` cookie keeps
+      pointing at it).
+      **Deliberate scope boundary, not an oversight:** order-fulfillment's
+      three writes (order+items, inventory movements, cart-clear) are NOT
+      yet one atomic database transaction — this task's AC ("replaying the
+      same event twice creates exactly one order and decrements inventory
+      once") is satisfied by the webhook_events idempotency guard
+      (`fulfillCheckoutSession` runs at most once per Stripe event id), not
+      by transactional atomicity across all four writes. Wrapping them into
+      one `db.transaction` with an explicit partial-failure rollback test is
+      fix_plan's own next task, 3.5, by design (same "pure decision /
+      apply+harden" split as 1.4a/b, 3.2a/b).
+      Tests: `webhook-events.test.ts` (3), `cart.test.ts`
+      (+2 for `deleteCartItemsByCartId`), `orders.test.ts` (+2 for
+      `getOrderByStripePaymentIntentId`), `order-fulfillment.test.ts` (3 —
+      happy path incl. stock decrement + cart-empty assertions, no
+      cart_id metadata, empty cart), `stripe/webhook.test.ts` (12 — valid
+      signature parses, invalid signature throws, replay is a true no-op
+      (one order, one `sale` movement, `webhook_events.processed_at` set),
+      unhandled event type logs + still marks processed,
+      `payment_intent.payment_failed` logs only, `charge.refunded` full and
+      partial refund branches, refund with no matching order, dispute with
+      a matching order, dispute/refund with a null `payment_intent` —
+      the last two added specifically to clear `src/lib/stripe/**`'s 90%
+      branch floor, not padding), `route.test.ts` (4 — valid signature end
+      to end via the exported `POST`, invalid signature returns 400 and
+      writes no `webhook_events` row, missing signature header returns 400,
+      unhandled type returns 200). All confirmed red first (missing
+      exports/import-resolution errors) before implementing.
+      AC met, verified two ways: `npm run verify` green (49 files, 405
+      tests, 98.42/93.88/100/98.36% global coverage — `src/lib/stripe/**`'s
+      90% floor and `src/lib/services/**`'s 90% floor both clear in
+      aggregate; build's route table shows `ƒ /api/webhooks/stripe`), and a
+      real `next dev` server hit with `curl` using a genuinely
+      `stripe.webhooks.generateTestHeaderString`-signed payload against the
+      real `.env.local` `STRIPE_WEBHOOK_SECRET`: an unhandled-type event
+      (`customer.created`) returned `200 {"received":true}` and left a
+      `webhook_events` row with `processed_at` set (confirmed via `psql`,
+      then deleted — a real, not mocked, live-server round trip, not just
+      direct-function-call tests); the same payload replayed with a
+      deliberately wrong signature returned
+      `400 {"error":"invalid signature"}`.
+      NOTE for 3.5: harden `fulfillCheckoutSession`'s three writes into one
+      `withTransaction` call (repos/transaction.ts already exists, built for
+      exactly this in 1.4b) and add the explicit partial-failure rollback
+      test 3.5's own AC requires.
+      NOTE for 3.6 (oversell guard): `fulfillCheckoutSession` does not
+      compute `order_items.oversold_quantity` yet (stays at the schema's
+      default 0) — 1.7's NOTE already flagged this as checkout's job; 3.6 is
+      where "re-check stock ... at webhook time" and the oversold math both
+      belong together, not this task.
+      NOTE for 4.8 (Refunds): `charge.refunded`'s "optionally restock" half
+      of the spec's Action column is intentionally not implemented — only
+      the order status transition is. Restocking on refund is a business
+      decision (a hand-damaged returned candle may not be resellable) better
+      made in the admin refunds flow, not assumed here.
 
 - [ ] **3.5 Order creation + inventory decrement**
       Deps: 3.4. Single database transaction: create order, create order items,
@@ -2418,6 +2507,17 @@ false})` per product, since Prices can't be deleted once created, only
   ship in (dimensions + packaging weight) — not something to invent a
   placeholder for the way `FLAT_RATE_SHIPPING_CENTS` was, since a wrong
   return address ends up printed on a real, paid-for label.
+- **No `disputed` order status or owner-notification channel (3.4).**
+  `specs/05-payments.md`'s webhook table says `charge.dispute.created`
+  should "flag order, notify owner" — `orders.status`'s enum has no
+  `disputed` value (`pending|paid|fulfilled|cancelled|refunded|
+partially_refunded`) and no notification channel exists yet (3.7 wires
+  up Resend for receipt emails only, to the customer, not the owner).
+  `src/lib/stripe/webhook.ts`'s dispute handler currently only
+  `console.error`s the matched order id — a real fix needs either a schema
+  decision (new `disputed_at` column? repurpose a status value?) or an
+  owner-notification decision (email? SMS? dashboard badge, deferred to
+  4.9's audit log view?), not a guess made mid-webhook-task.
 - **USPS Hazmat/carrier-restriction confirmation for candles, needed before
   4.7's first real label purchase and definitely before any international
   shipping** (`specs/07-security-legal.md`'s existing flammable-goods flag,

@@ -41,6 +41,16 @@ export async function getOrderByStripeSessionId(
   return order;
 }
 
+export async function getOrderByStripePaymentIntentId(
+  stripePaymentIntentId: string,
+): Promise<Order | undefined> {
+  const [order] = await db
+    .select()
+    .from(orders)
+    .where(eq(orders.stripePaymentIntentId, stripePaymentIntentId));
+  return order;
+}
+
 export async function listOrdersByStatus(
   status: OrderStatus,
 ): Promise<Order[]> {

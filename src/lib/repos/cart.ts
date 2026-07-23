@@ -71,3 +71,13 @@ export async function removeCartItem(
       and(eq(cartItems.cartId, cartId), eq(cartItems.variantId, variantId)),
     );
 }
+
+// Empties a cart after a successful checkout (specs/05-payments.md:
+// "checkout.session.completed" -> "empty cart"). Deletes every item row but
+// leaves the cart row itself, since the cart_id cookie keeps pointing at it.
+export async function deleteCartItemsByCartId(
+  cartId: string,
+  executor: DbExecutor = db,
+): Promise<void> {
+  await executor.delete(cartItems).where(eq(cartItems.cartId, cartId));
+}

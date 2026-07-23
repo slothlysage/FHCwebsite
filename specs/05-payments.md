@@ -400,3 +400,95 @@ item to the cart and submitting the real rendered Checkout form correctly
 redirected to `/cart?checkout_error=unavailable` and rendered the banner —
 proving the "no Stripe Price yet" guard works end-to-end without needing
 `--apply` to have been run first.
+
+## Implementation notes (3.4)
+
+`src/app/api/webhooks/stripe/route.ts` is intentionally thin: read
+`request.text()` (App Router Route Handlers never auto-parse the body —
+there is no Pages-Router-style `api.bodyParser` to disable, so this raw read
+already satisfies "Next.js must not parse it before signature
+verification"), read the `stripe-signature` header, call
+`src/lib/stripe/webhook.ts`'s `verifyWebhookSignature` then
+`handleStripeWebhookEvent`, map to a `Response`. All the real logic — where
+this repo's "webhook handlers" live per AGENT.md's layout — is in
+`src/lib/stripe/webhook.ts` and a new `src/lib/services/
+order-fulfillment.ts`.
+
+**Idempotency, exactly as this spec's own section above describes**:
+`insertWebhookEvent` (new `src/lib/repos/webhook-events.ts`) uses
+`.onConflictDoNothing({ target: webhookEvents.stripeEventId })` and checks
+whether `.returning()` actually came back with a row, rather than hand-
+catching a raw Postgres `23505` unique-violation error — same result
+(replay does nothing further), more idiomatic for a repo function callers
+just get a boolean from.
+
+**Dispatch, one handler per event type in the spec's table above**:
+
+- `checkout.session.completed` → `fulfillCheckoutSession` (see below).
+- `payment_intent.payment_failed` → log only. There is no `order_draft_id`
+  (see this file's 3.3 notes) and therefore no row anywhere to mark unpaid
+  — "log" is the entire correct handler, not a stub.
+- `charge.refunded` → new `getOrderByStripePaymentIntentId` repo lookup,
+  then `updateOrder(order.id, { status })` where `status` is `"refunded"`
+  if the charge object's own `refunded` boolean is `true` (Stripe only sets
+  this once the full amount is refunded), else `"partially_refunded"`. The
+  spec's "optionally restock" is deliberately NOT implemented here — see
+  fix_plan.md's NOTE for 4.8.
+- `charge.dispute.created` → looks up the order the same way, but only
+  logs (order id or "no matching order"). No schema mutation: `orders.status`
+  has no `disputed` value and no owner-notification channel exists yet. See
+  fix_plan.md's "Blocked — needs human" entry — this needs a real decision,
+  not a guessed-at status value or a fake notification that isn't sent.
+- anything else → `console.log` and fall through to `markWebhookEventProcessed`,
+  satisfying "unhandled event type returns 200 and is logged."
+
+**`fulfillCheckoutSession` (`src/lib/services/order-fulfillment.ts`)** is
+new business logic, not folded into `webhook.ts` itself, matching
+AGENT.md's "services/ = business logic, heaviest test target" — `stripe/`
+dispatches, `services/` decides what a completed checkout actually does.
+It re-derives order line items from `getCartSummary(session.metadata.cart_id)`
+— the same read `createCheckoutSession` (3.3) used to build the original
+Stripe line items — keeping the database the one source of truth for
+catalog identity (product/variant names, SKUs). Money totals
+(`subtotalCents`, `shippingCents`, `taxCents`, `discountCents`,
+`totalCents`) are read directly off the Stripe session's own
+`amount_subtotal`/`amount_total`/`shipping_cost.amount_total`/
+`total_details.amount_tax`/`total_details.amount_discount` fields instead —
+Stripe is the source of truth for payment amounts (AGENT.md), including
+tax and shipping, both of which Stripe itself computed
+(`automatic_tax`/`shipping_options`), not something to recompute
+client-side from the cart a second time.
+
+Order creation reuses `orders.createOrder` (1.3d — already one transaction
+for the order + its items). Inventory is decremented per line via
+`recordMovement({ reason: "sale", referenceId: order.id })`, and the cart is
+emptied via a new `deleteCartItemsByCartId` repo function (deletes
+`cart_items` rows only — the `carts` row itself survives, since the
+`cart_id` cookie keeps pointing at it for the customer's next visit).
+
+**Not yet one atomic transaction — by design, not an oversight.** This
+task's AC ("replaying the same event twice creates exactly one order and
+decrements inventory once") holds because `handleStripeWebhookEvent` never
+calls `fulfillCheckoutSession` more than once per Stripe event id (the
+`webhook_events` guard), not because the order+items/inventory/cart-clear
+writes inside `fulfillCheckoutSession` already commit or roll back
+together. Wrapping them in one `withTransaction` call (already exists,
+`src/lib/repos/transaction.ts`, built for exactly this in 1.4b) plus the
+explicit partial-failure rollback test is fix_plan.md task 3.5's whole job
+— the same "decide, then harden" split as 1.4a/1.4b and 3.2a/3.2b.
+
+**Testing — no msw needed for any of this.** Unlike 3.2b/3.3's
+Stripe-API-_calling_ code, nothing here makes an outbound Stripe request:
+`verifyWebhookSignature` is pure local HMAC verification
+(`stripe.webhooks.constructEvent`), and `fulfillCheckoutSession` only reads
+the plain event object it's handed. Tests build real signed payloads with
+`stripe.webhooks.generateTestHeaderString({ payload, secret:
+env.STRIPE_WEBHOOK_SECRET })` against the real (dummy, `.env.local`)
+webhook secret, exactly as this spec's own Testing section prescribes, and
+call the exported `POST` from `route.ts` directly with a real `Request` —
+same "invoke the handler and await it" pattern `products/page.test.tsx`
+established for Server Components, extended to Route Handlers. Two
+`stripe/webhook.test.ts` cases (a `charge.refunded`/`charge.dispute.created`
+pair with a `null` `payment_intent`) exist specifically to clear
+`src/lib/stripe/**`'s 90% branch-coverage floor, not as padding — without
+them `paymentIntentIdOf`'s `: null` branch was never exercised.

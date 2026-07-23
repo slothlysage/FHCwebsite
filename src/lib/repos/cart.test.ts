@@ -5,6 +5,7 @@ import { db } from "@/lib/db/client";
 import { cartItems, carts, productVariants, products } from "@/lib/db/schema";
 import {
   createCart,
+  deleteCartItemsByCartId,
   getCartById,
   listCartItemsByCartId,
   removeCartItem,
@@ -171,5 +172,42 @@ describe("cart repo", () => {
     // it doesn't delete it.
     const stillFound = await getCartById(cart.id);
     expect(stillFound?.id).toBe(cart.id);
+  });
+
+  it("deletes every item in a cart, leaving the cart row itself intact", async () => {
+    const cart = await createCart();
+    insertedCartIds.push(cart.id);
+    const { variant: variantA } = await makeProductAndVariant(
+      "test-cart-clear-a",
+      "TEST-CART-CLEAR-A",
+    );
+    const { variant: variantB } = await makeProductAndVariant(
+      "test-cart-clear-b",
+      "TEST-CART-CLEAR-B",
+    );
+    await upsertCartItem({
+      cartId: cart.id,
+      variantId: variantA.id,
+      quantity: 1,
+    });
+    await upsertCartItem({
+      cartId: cart.id,
+      variantId: variantB.id,
+      quantity: 2,
+    });
+
+    await deleteCartItemsByCartId(cart.id);
+
+    const items = await listCartItemsByCartId(cart.id);
+    expect(items).toEqual([]);
+    const stillFound = await getCartById(cart.id);
+    expect(stillFound?.id).toBe(cart.id);
+  });
+
+  it("clearing an already-empty cart is a harmless no-op", async () => {
+    const cart = await createCart();
+    insertedCartIds.push(cart.id);
+
+    await expect(deleteCartItemsByCartId(cart.id)).resolves.not.toThrow();
   });
 });

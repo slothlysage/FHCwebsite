@@ -8,6 +8,7 @@ import { orderItems, orders } from "@/lib/db/schema";
 import {
   createOrder,
   getOrderById,
+  getOrderByStripePaymentIntentId,
   getOrderByStripeSessionId,
   listOrdersByStatus,
   updateOrder,
@@ -145,6 +146,26 @@ describe("orders repo", () => {
 
   it("returns undefined for an unknown stripe session id", async () => {
     const found = await getOrderByStripeSessionId(`cs_test_${randomUUID()}`);
+    expect(found).toBeUndefined();
+  });
+
+  it("gets an order by stripe payment intent id", async () => {
+    const stripeSessionId = `cs_test_${randomUUID()}`;
+    const paymentIntentId = `pi_test_${randomUUID()}`;
+    const created = await createOrder(
+      { ...baseOrder(stripeSessionId), stripePaymentIntentId: paymentIntentId },
+      [],
+    );
+    insertedOrderIds.push(created.id);
+
+    const found = await getOrderByStripePaymentIntentId(paymentIntentId);
+    expect(found?.id).toBe(created.id);
+  });
+
+  it("returns undefined for an unknown stripe payment intent id", async () => {
+    const found = await getOrderByStripePaymentIntentId(
+      `pi_test_${randomUUID()}`,
+    );
     expect(found).toBeUndefined();
   });
 
