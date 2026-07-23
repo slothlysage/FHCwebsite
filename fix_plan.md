@@ -1318,16 +1318,43 @@ stripe/**` 90% floor both clear; `product-json-ld.ts` itself 100%
         "the primary image" a third way if 2.6d needs one; reuse
         `detail.images[0]`.
 
-  - [ ] **2.6c `sitemap.xml` + `robots.txt`**
-        Deps: 2.5. `src/app/sitemap.ts` (Next's `MetadataRoute.Sitemap`) —
-        static routes (`/`, `/products`) plus one entry per published,
-        non-deleted product via the existing products repo, each URL built
-        from `NEXT_PUBLIC_SITE_URL` + canonical path (no query strings).
-        `src/app/robots.ts` — disallow `/admin`, `/api`; reference the
-        sitemap.
-        AC: the sitemap lists every published product and none that are
-        draft/archived/deleted (integration-tested against the dev
-        database); `robots.txt` disallows admin/api routes.
+  - [x] **2.6c `sitemap.xml` + `robots.txt`**
+        Deps: 2.5. `src/app/sitemap.ts` (Next's `MetadataRoute.Sitemap`
+        convention, default-exported async function) — static routes (`/`,
+        `/products`) plus one entry per published, non-deleted product via
+        the existing `listProducts({ status: "published" })` (already
+        excludes soft-deleted by default per 1.3a — no new repo function
+        needed), each URL built from `env.NEXT_PUBLIC_SITE_URL` + canonical
+        path (no query strings), with `lastModified: product.updatedAt` on
+        product entries. `src/app/robots.ts` — disallow `/admin`, `/api`;
+        `sitemap:` field points at `${NEXT_PUBLIC_SITE_URL}/sitemap.xml`.
+        `sitemap.ts` gained `export const dynamic = "force-dynamic"` — same
+        rationale as 2.2/2.5's listing/detail pages (AGENT.md: the database
+        is the source of truth for catalog/inventory). This was caught by
+        actually reading `next build`'s route table, not by the tests: the
+        first `npm run verify` run built `/sitemap.xml` as `○` (static,
+        build-time snapshot) and only turned `ƒ` after adding the export —
+        the same class of bug 2.2's NOTE flagged for `/products`. `robots.ts`
+        was deliberately left static — it has no catalog dependency, only
+        the build-time `NEXT_PUBLIC_SITE_URL` env var.
+        Tests: `sitemap.test.ts` (3 integration tests against the real dev
+        database — static routes present, published product included and
+        draft/archived/soft-deleted products excluded, product URLs have no
+        query string) and `robots.test.ts` (1 unit test — disallow rules +
+        sitemap reference). Both confirmed red first (import-resolution
+        error, modules didn't exist) before implementing.
+        AC met, verified two ways: the test suite above, and a real
+        `next dev` server hit with `curl` against the live catalog (1.6's
+        real import) — `/sitemap.xml` listed exactly the 5 published
+        products with `lastmod` timestamps, `/robots.txt` disallowed
+        `/admin` and `/api` and referenced the sitemap. `npm run verify`
+        green: 33 files, 272 tests, 98.85/96.3/100/98.79% coverage (global
+        80% floor clears easily; `sitemap.ts`/`robots.ts` both 100%), build
+        passes, route table shows `/sitemap.xml` as `ƒ` and `/robots.txt`
+        as `○`.
+        NOTE for 2.6d (OG images): no interaction with sitemap/robots —
+        flagging only that this closes out three of 2.6's four sub-tasks;
+        2.6d is the last one before the umbrella 2.6 can tick.
 
   - [ ] **2.6d OG images**
         Deps: 2.6a. Dynamic per-product OG image (`next/og` /
@@ -1431,7 +1458,7 @@ CRUD to exist first.
 - [ ] **3b.1 Service types + booking Checkout session**
       Deps: 3.1. `service_types` table + repo. Checkout session in `payment`
       mode, price server-derived from `service_types`, `metadata: {
-    service_type_id }`.
+  service_type_id }`.
       AC: a tampered client price/service id produces a session with the
       correct server-derived amount (same mandatory test shape as 3.3).
 
