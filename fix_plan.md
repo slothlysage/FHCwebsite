@@ -1893,7 +1893,7 @@ client.ts`: (1) the Stripe SDK's default Node HTTP client defers
       AC: a tampered client payload (altered price or quantity) produces a session
       with the correct server-derived amounts. This test is mandatory.
       `src/lib/services/checkout.ts` — `createCheckoutSession(cartId,
-    {idempotencyKey})`. Takes only a cart id + idempotency key, no
+  {idempotencyKey})`. Takes only a cart id + idempotency key, no
       price/quantity/total parameter exists for a client to reach; all
       pricing comes from `getCartSummary` (2.7). Line items reference each
       variant's already-synced `stripePriceId` (3.2's `runStripeSync`), not
@@ -1902,7 +1902,7 @@ client.ts`: (1) the Stripe SDK's default Node HTTP client defers
       fails the whole checkout (`{ok: false, reason: "unavailable"}`)
       rather than silently dropping that line. Flat US-only shipping rate
       (placeholder amount, owner to confirm) + `automatic_tax: {enabled:
-    true}` (needs a Stripe Dashboard Tax origin address before a real,
+  true}` (needs a Stripe Dashboard Tax origin address before a real,
       non-mocked call succeeds — not something code can satisfy).
       `src/lib/actions/checkout.ts` — `createCheckoutSessionAction`, a
       Server Action bound to a new Checkout form on the cart page
@@ -1910,7 +1910,7 @@ client.ts`: (1) the Stripe SDK's default Node HTTP client defers
       `formData` is a `nonce` field the cart page generates fresh
       (`crypto.randomUUID()`) on every render; `cartId` comes from the
       `cart_id` cookie. Idempotency key is `checkout-session-{cartId}-
-    {nonce}` — not derived from `carts.updatedAt`, which is never bumped
+  {nonce}` — not derived from `carts.updatedAt`, which is never bumped
       after cart creation and so can't distinguish "same attempt retried"
       from "a week later." Mandatory tamper test
       (`src/lib/actions/checkout.test.ts`) POSTs a payload with extra
@@ -2303,7 +2303,7 @@ false})` per product, since Prices can't be deleted once created, only
   Dashboard step, not something code can do. Untested against live Stripe
   in 3.3 for the same reason 3.2b's `--apply` wasn't (see the stray-objects
   entry above) — verify this once the owner is ready to run a real session.
-- **Checkout requires 3.2's `--apply` to have actually been run (3.3).** A
+- ~~**Checkout requires 3.2's `--apply` to have actually been run (3.3).** A
   cart line whose variant has no `stripePriceId` yet makes
   `createCheckoutSession` return `unavailable` for the whole cart — by
   design (specs/05-payments.md's "Implementation notes (3.3)": line items
@@ -2313,7 +2313,12 @@ false})` per product, since Prices can't be deleted once created, only
   against the real catalog — confirmed live via `next dev` + curl, which
   correctly hit the `unavailable` guard rather than crashing or mischarging.
   Resolving the stray-objects decision above and running `--apply` for real
-  unblocks this too.
+  unblocks this too.~~ RESOLVED 2026-07-23: owner ran `npm run sync-stripe --
+--apply` for real against the dev DB. Verified — all 45 `FC_%` variants now
+  have a non-null `stripe_price_id`. Checkout is unblocked end-to-end against
+  the real catalog. (The 51 stray-objects cleanup decision above is separate
+  and still open — it's about tidying up leftover test-mode clutter, not
+  about the catalog sync itself.)
 
 ## Done
 
