@@ -1,0 +1,24 @@
+// Cloudflare Workers config for the OpenNext adapter (specs/01-stack-and-hosting.md).
+// Built output lands in .open-next/ via `opennextjs-cloudflare build`.
+// Runtime secrets (DATABASE_URL, STRIPE_*) are NOT set here — they live in the
+// Cloudflare dashboard (Settings → Variables and Secrets) per specs/08-deploy-ops.md:
+// "Production secrets exist only in the Cloudflare dashboard."
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "fhcwebsite",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2025-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    // Self-reference binding the OpenNext runtime uses for ISR/revalidation
+    // calls back into this worker.
+    { "binding": "WORKER_SELF_REFERENCE", "service": "fhcwebsite" }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

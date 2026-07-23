@@ -114,6 +114,24 @@ warning is minor, and it avoids running a tool whose engine requirement
 outright excludes the current Node line. Revisit the pin when the sandbox
 Node version moves to 22.x.
 
+## Adapter wiring notes (6.0, 2026-07-22)
+
+The `@opennextjs/cloudflare` adapter is wired in (see fix_plan task 6.0 for
+full detail): `wrangler.jsonc` + `open-next.config.ts` + `preview`/`deploy`
+scripts. Two things worth re-reading before touching it:
+
+- `src/lib/db/client.ts` is dual-driver: Neon serverless **HTTP** driver on
+  workerd (no TCP there; stateless per-query fetch), `pg` everywhere else.
+  neon-http cannot run interactive `db.transaction` — the checkout
+  transaction (3.5) needs a per-request WebSocket `Pool` from
+  `@neondatabase/serverless` when it lands.
+- `next.config.ts` has `outputFileTracingIncludes` for `pg-cloudflare` —
+  without it the OpenNext bundle step fails on a missing `dist/index.js`
+  (Next traces pg's shim through the `default` export condition, OpenNext
+  resolves the `workerd` one). Don't remove it as "unused".
+- Local `wrangler dev`/`npm run deploy` need Node ≥ 22 (this sandbox has
+  20.15); Cloudflare's git-connected builds run Node 22+ and are fine.
+
 ## Alternative if the agent struggles with the Cloudflare adapter
 
 `@opennextjs/cloudflare` is less mature than Vercel's first-party path and some
