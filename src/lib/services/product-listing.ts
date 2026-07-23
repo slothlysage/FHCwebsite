@@ -82,6 +82,40 @@ export async function getFilteredProductListing(
   return { items, hasNextPage };
 }
 
+// Newest-first, published-only highlight reel for the home page (fix_plan
+// 2.9) — no facets, no pagination peek, just the N most recent published
+// products. Same two-query shape as getFilteredProductListing (products,
+// then one batch image lookup) minus the +1-row hasNextPage trick, which
+// doesn't apply here.
+export async function getFeaturedProductListing(
+  limit: number,
+): Promise<ProductListingItem[]> {
+  const matchedProducts = await listPublishedProductsFiltered({
+    sort: "newest",
+    limit,
+    offset: 0,
+  });
+  if (matchedProducts.length === 0) {
+    return [];
+  }
+
+  const productIds = matchedProducts.map((product) => product.id);
+  const imagesByProduct = await listPrimaryImagesByProductIds(productIds);
+
+  return matchedProducts.map((product) => {
+    const image = imagesByProduct.get(product.id);
+    return {
+      id: product.id,
+      slug: product.slug,
+      name: product.name,
+      image: image ? { url: image.url, altText: image.altText } : null,
+      priceFromCents: product.priceFromCents,
+      inStock: product.inStock,
+      purchasable: product.purchasable,
+    };
+  });
+}
+
 // The available filter options for the storefront's facet UI — every
 // category/scent/size with at least one live published product behind it.
 export async function getFilterFacets(): Promise<FilterFacets> {

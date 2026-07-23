@@ -1677,20 +1677,70 @@ allow_backorder` rule — a backorder-enabled variant has no real
       AC: all footer links resolve; no lorem ipsum ships.
       🚦 HUMAN GATE — policy copy must be written/approved by the owner.
 
-- [ ] **2.9 Home page**
+- [x] **2.9 Home page**
       Deps: 2.2. Discovered during the 2026-07-22 repo sweep:
       `specs/03-storefront.md`'s route table line 1 is `/` — "home:
       featured products, brand story" — but no task ever replaced the 0.1
       scaffold placeholder ("Storefront under construction"), and every
-      other route in that table is covered by 2.2/2.5/2.8. Featured
-      products can reuse `getFilteredProductListing` (e.g. newest N
-      published); the brand-story copy needs owner input (same human gate
-      as 2.8's About page — placeholder-free rule applies), but the
-      featured-products section and page structure can land now.
+      other route in that table is covered by 2.2/2.5/2.8. This task's own
+      AC (below, unchanged from when it was written) deliberately excludes
+      "brand story" — that half stays under "Blocked — needs human" (same
+      gate as 2.8's policy copy), only the featured-products/structure half
+      is this task's scope.
+      New `src/lib/services/product-listing.ts` function
+      `getFeaturedProductListing(limit)` — newest-first, published-only,
+      no facets/pagination (an extension of the existing module per the
+      loop's "search before creating a sibling" rule, not a new service).
+      Same two-query shape as `getFilteredProductListing` (products via
+      `listPublishedProductsFiltered({sort: "newest", limit, offset: 0})`,
+      then one batch image lookup) minus the +1-row `hasNextPage` peek,
+      which doesn't apply to a fixed-size highlight reel.
+      `src/app/page.tsx` — now an async Server Component (`export const
+    dynamic = "force-dynamic"`, same rationale as every other
+      catalog-backed route: 2.2/2.5/2.6c). Renders the real brand
+      name/description already approved for SEO use in `layout.tsx`'s root
+      `metadata` (not new marketing copy — reusing "Handmade candles, body
+      butter, and self-care products."), a "Shop all products" CTA to
+      `/products`, and a "Featured products" `<section>` (4 newest
+      published products) built from the existing `ProductGrid` component
+      (2.2) — no new presentational component needed.
+      Tests: 2 new cases in `product-listing.test.ts`'s existing file (new
+      `describe("getFeaturedProductListing")` block — respects the limit,
+      excludes draft/archived regardless of recency, orders newest-first
+      between two back-to-back-created products via relative index rather
+      than an absolute-position assertion — same "don't assert against
+      shared-dev-DB global state" lesson as 2.2/2.4's NOTEs — includes the
+      primary image or null, empty array for a zero limit). `page.test.tsx`
+      rewritten from the old `render(<Home />)` RTL-only test to the
+      "invoke the async Server Component directly and await it" pattern
+      (`products/page.test.tsx`'s own precedent) — 5 integration tests
+      against the real dev database: heading renders and "under
+      construction" text is gone, the products CTA link's href, a
+      published product appears in the featured section linking to its
+      detail page, a draft product is excluded, zero axe violations.
+      Confirmed every new test red first (`getFeaturedProductListing` not
+      a function; old test still passing against the placeholder page
+      before the rewrite, then the rewritten assertions failing against
+      the still-placeholder markup) before implementing.
+      AC met, verified two ways: the test suite above (`npm run verify`
+      green — 40 files, 340 tests, 98.84/95.84/100/98.79% coverage, global
+      80% floor and `src/lib/services/**` 90% floor both clear; build's
+      route table shows `ƒ /` not `○`, confirming it isn't statically
+      prerendered), and a real `next dev` server hit with `curl` against
+      the live catalog (1.6's real import): the response contains "Featured
+      products", a "Shop all products" link to `/products`, four real
+      product cards (8oz Body Butter/Shampoo Bar/Conditioner Bar/Soap, each
+      linking to its real `/products/{slug}`) and no longer contains
+      "under construction" anywhere in the HTML.
       AC: `/` renders a featured-products section fed by the live catalog
       (no hardcoded product data), links through to `/products` and
       product detail pages, axe-clean, and no longer says "under
       construction". Sitemap (2.6c) already plans to list `/`.
+      NOTE for whoever closes the brand-story gate: `page.tsx`'s hero
+      block (the `<div className="py-12 text-center">`) is exactly where a
+      real "About the maker" narrative paragraph belongs, immediately below
+      the existing factual tagline — don't add a second hero section, extend
+      this one once the owner supplies the copy.
 
 ---
 
@@ -2008,6 +2058,11 @@ _(agent appends here; do not guess around a blocker)_
   and definitely before 2.6 (OG images) and 5.4 (Lighthouse/LCP image) make
   photography decisions load-bearing.
 - Policy copy: shipping, returns, privacy, terms — needed for 2.8.
+- Brand-story narrative copy ("About the maker" paragraph) for the home
+  page — `specs/03-storefront.md`'s route table calls for it alongside
+  featured products, but 2.9's own AC never required it and was closed
+  without it (2026-07-23). The hero section it belongs in already exists
+  in `src/app/page.tsx`, ready to extend once the owner supplies text.
 - Confirmation on cosmetics labeling: MoCRA requires an ingredient list and a
   responsible-person contact for body butter; candles need ASTM F2417 fire-safety
   warnings. Product data model assumes these fields exist. Needed for 1.1.

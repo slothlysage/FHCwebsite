@@ -18,6 +18,7 @@ import { replaceProductImages } from "@/lib/repos/images";
 import { createProduct } from "@/lib/repos/products";
 import { createVariant, deactivateVariant } from "@/lib/repos/variants";
 import {
+  getFeaturedProductListing,
   getFilteredProductListing,
   getFilterFacets,
 } from "@/lib/services/product-listing";
@@ -301,6 +302,89 @@ describe("getFilteredProductListing", () => {
       .delete(productCategories)
       .where(eq(productCategories.categoryId, category.id));
     await db.delete(categories).where(eq(categories.id, category.id));
+  });
+});
+
+describe("getFeaturedProductListing", () => {
+  const insertedProductIds: string[] = [];
+
+  afterEach(async () => {
+    for (const productId of insertedProductIds.splice(0)) {
+      await db
+        .delete(productVariants)
+        .where(eq(productVariants.productId, productId));
+      await db
+        .delete(productImages)
+        .where(eq(productImages.productId, productId));
+      await db.delete(products).where(eq(products.id, productId));
+    }
+  });
+
+  async function makeProduct(
+    slug: string,
+    status: "draft" | "published" | "archived" = "published",
+  ) {
+    const product = await createProduct({ slug, name: slug, status });
+    insertedProductIds.push(product.id);
+    return product;
+  }
+
+  it("never returns more than the requested limit", async () => {
+    const items = await getFeaturedProductListing(2);
+    expect(items.length).toBeLessThanOrEqual(2);
+  });
+
+  it("excludes unpublished and soft-deleted products regardless of recency", async () => {
+    const draft = await makeProduct("test-featured-draft", "draft");
+    const archived = await makeProduct("test-featured-archived", "archived");
+
+    const items = await getFeaturedProductListing(1000);
+    const ids = items.map((item) => item.id);
+
+    expect(ids).not.toContain(draft.id);
+    expect(ids).not.toContain(archived.id);
+  });
+
+  it("orders newest-first between two products it created back to back", async () => {
+    const older = await makeProduct("test-featured-older");
+    const newer = await makeProduct("test-featured-newer");
+
+    const items = await getFeaturedProductListing(1000);
+    const olderIndex = items.findIndex((item) => item.id === older.id);
+    const newerIndex = items.findIndex((item) => item.id === newer.id);
+
+    expect(olderIndex).toBeGreaterThanOrEqual(0);
+    expect(newerIndex).toBeGreaterThanOrEqual(0);
+    expect(newerIndex).toBeLessThan(olderIndex);
+  });
+
+  it("includes the primary image, or null when a product has none", async () => {
+    const product = await makeProduct("test-featured-with-image");
+    await replaceProductImages(product.id, [
+      {
+        url: "https://example.com/featured.jpg",
+        altText: "Featured",
+        position: 1,
+        width: 0,
+        height: 0,
+      },
+    ]);
+
+    const items = await getFeaturedProductListing(1000);
+    const item = items.find((i) => i.id === product.id);
+
+    expect(item?.image).toEqual({
+      url: "https://example.com/featured.jpg",
+      altText: "Featured",
+    });
+  });
+
+  it("returns an empty array when there are no published products to show", async () => {
+    // Not asserted against the shared dev DB's global state (it always has
+    // real published products) — this only proves the zero-match early
+    // return doesn't throw or need special-casing, via a limit of 0.
+    const items = await getFeaturedProductListing(0);
+    expect(items).toEqual([]);
   });
 });
 

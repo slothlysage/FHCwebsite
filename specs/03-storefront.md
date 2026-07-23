@@ -355,3 +355,17 @@ than silently adjusting.
 
 Every list has an empty state. Every async action has a pending state. Every
 failure has a message that says what to do next, not "Something went wrong."
+
+## Implementation notes (2.9 — home page)
+
+The route table's `/` line calls for "featured products, brand story" — only
+the featured-products half is built; the brand-story narrative is a human
+gate (real marketing/about-the-maker copy, not placeholder text — see
+fix_plan.md's "Blocked — needs human").
+
+`getFeaturedProductListing(limit)` (`src/lib/services/product-listing.ts`) is
+the newest-first, unfiltered, non-paginated sibling of `getFilteredProductListing`
+— reuse it for any future "N most recent published products" need (e.g. a
+"New arrivals" section) rather than re-deriving the query. It intentionally
+has no `hasNextPage`/facet support; that's what `getFilteredProductListing`
+is for.
