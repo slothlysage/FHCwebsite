@@ -101,6 +101,39 @@ price <= max` when `min > max`, so the `EXISTS` is false for every
   string serializer, used for chip/clear-filters links) is what 2.4 should
   extend for page-link hrefs, not replace.
 
+## Implementation notes (2.4 — pagination)
+
+- `ProductFilters.page` (1-based, default 1) lives in
+  `src/lib/validation/product-filters.ts` alongside `PRODUCTS_PAGE_SIZE`
+  (24). `filtersToSearchParams` omits `page` when it's 1, same convention as
+  `sort` omitting `"newest"`.
+- The repo (`listPublishedProductsFiltered`) does **not** take a `page`
+  number — it takes raw `limit`/`offset`. The service layer
+  (`getFilteredProductListing`) is what translates a page number into
+  those, requesting `limit: PRODUCTS_PAGE_SIZE + 1` and slicing the extra
+  row off to compute `hasNextPage` without a second COUNT query. This
+  split exists because the peek needs a limit one row larger than the
+  offset stride uses — a single "page size" value can't drive both without
+  silently corrupting the offset math on `page >= 2` (hit and fixed during
+  2.4; see fix_plan.md's NOTE for the exact failure). Any future pagination
+  work should keep `limit`/`offset` as the repo's primitive and do
+  page-number arithmetic one layer up.
+- `ProductPagination` (`src/components/product-pagination.tsx`) is plain
+  `<a>` links built from `filtersToSearchParams`, same no-JS-required
+  philosophy as `ProductFiltersForm`. It renders nothing when there's only
+  one page (no previous, no next).
+- Integration tests that exercise real pagination (LIMIT/OFFSET boundaries,
+  `hasNextPage`) scope their query to a throwaway category created just for
+  that test, rather than relying on `toContain` against an unpaginated
+  full-catalog result. The dev database is shared across concurrently-run
+  vitest files; an unpaginated query is immune to whatever unrelated data
+  exists elsewhere at that instant, but a LIMIT-24 query is not — a test's
+  own product could get pushed off page 1 by another file's concurrently
+  created products. Category-scoping (or, where that's not natural,
+  accepting the cost of seeding `PRODUCTS_PAGE_SIZE + 1` rows) sidesteps
+  this rather than making pagination tests flaky under parallel test
+  execution.
+
 ## Product detail
 
 Above the fold: image gallery, name, price (updates with variant), variant

@@ -17,6 +17,7 @@ describe("parseProductFilters", () => {
       maxPriceCents: undefined,
       inStockOnly: false,
       sort: "newest",
+      page: 1,
     });
   });
 
@@ -96,6 +97,30 @@ describe("parseProductFilters", () => {
     });
     expect(filters.categorySlugs).toEqual(["candles"]);
   });
+
+  it("defaults page to 1 when absent", () => {
+    expect(parseProductFilters({}).page).toBe(1);
+  });
+
+  it("parses a valid page number", () => {
+    expect(parseProductFilters({ page: "3" }).page).toBe(3);
+  });
+
+  it("defaults to 1 for a non-numeric page instead of erroring", () => {
+    expect(parseProductFilters({ page: "not-a-number" }).page).toBe(1);
+  });
+
+  it("defaults to 1 for page 0", () => {
+    expect(parseProductFilters({ page: "0" }).page).toBe(1);
+  });
+
+  it("defaults to 1 for a negative page", () => {
+    expect(parseProductFilters({ page: "-2" }).page).toBe(1);
+  });
+
+  it("defaults to 1 for a fractional page", () => {
+    expect(parseProductFilters({ page: "1.5" }).page).toBe(1);
+  });
 });
 
 describe("filtersToSearchParams", () => {
@@ -127,5 +152,15 @@ describe("filtersToSearchParams", () => {
       parseProductFilters({ sort: "newest" }),
     );
     expect(params.has("sort")).toBe(false);
+  });
+
+  it("omits page when it is 1 (the default)", () => {
+    const params = filtersToSearchParams(parseProductFilters({ page: "1" }));
+    expect(params.has("page")).toBe(false);
+  });
+
+  it("includes page when greater than 1", () => {
+    const params = filtersToSearchParams(parseProductFilters({ page: "2" }));
+    expect(params.get("page")).toBe("2");
   });
 });

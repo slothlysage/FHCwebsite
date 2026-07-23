@@ -6,7 +6,10 @@ import { db } from "@/lib/db/client";
 import { categories, productCategories, products } from "@/lib/db/schema";
 import { createCategory, linkProductCategory } from "@/lib/repos/categories";
 import { createProduct } from "@/lib/repos/products";
-import type { RawSearchParams } from "@/lib/validation/product-filters";
+import {
+  PRODUCTS_PAGE_SIZE,
+  type RawSearchParams,
+} from "@/lib/validation/product-filters";
 import ProductsPage from "./page";
 
 // Integration test against a real Postgres (specs/06-testing.md) — the page
@@ -118,5 +121,38 @@ describe("ProductsPage", () => {
     expect(
       screen.getByRole("link", { name: /unknown param product/i }),
     ).toBeInTheDocument();
+  });
+
+  it("page 2 preserves the active filter and shows the item that didn't fit on page 1", async () => {
+    const category = await createCategory({
+      slug: "test-products-page-2-category",
+      name: "Page 2 Category",
+    });
+    insertedCategoryIds.push(category.id);
+    const sameCreatedAt = new Date("2024-01-01T00:00:00Z");
+    for (let i = 0; i < PRODUCTS_PAGE_SIZE + 1; i++) {
+      const product = await createProduct({
+        slug: `test-products-page-2-${i}`,
+        name: `Page Two Product ${i}`,
+        status: "published",
+        createdAt: sameCreatedAt,
+      });
+      insertedIds.push(product.id);
+      await linkProductCategory(product.id, category.id);
+    }
+
+    render(await withSearchParams({ category: category.slug, page: "2" }));
+
+    // Exactly one product spills onto page 2.
+    expect(
+      screen.getAllByRole("link", { name: /page two product/i }),
+    ).toHaveLength(1);
+    expect(screen.getByRole("link", { name: /previous/i })).toHaveAttribute(
+      "href",
+      `/products?category=${category.slug}`,
+    );
+    expect(
+      screen.queryByRole("link", { name: /^next$/i }),
+    ).not.toBeInTheDocument();
   });
 });

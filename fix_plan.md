@@ -808,10 +808,89 @@ priceFromCents`, which is `NULL` for a product with zero active
       bug in a real catalog with unfinished/variant-less draft-turned-
       published products.
 
-- [ ] **2.4 Pagination**
-      Deps: 2.3. Cursor or offset, consistent with filters.
-      AC: page 2 preserves all active filters; no duplicate or dropped items across
-      page boundaries when sorting by a non-unique key (tie-break on id).
+- [x] **2.4 Pagination**
+      Deps: 2.3. `src/lib/validation/product-filters.ts` gained
+      `PRODUCTS_PAGE_SIZE = 24` and a `page` field on `ProductFilters`
+      (1-based, default 1 — non-numeric/zero/negative/fractional all fall
+      back to 1, same permissive-parsing convention as every other filter).
+      `filtersToSearchParams` omits `page` when it's 1, matching how `sort`
+      already omits its default.
+      `src/lib/repos/products.ts`'s `listPublishedProductsFiltered` gained
+      **`limit`/`offset`, not a `page` number** — deliberately a raw
+      primitive, not pagination-aware itself. Omitting `limit` returns every
+      match unpaginated (zero behavior change for any of the 19 pre-existing
+      callers that never set it). The existing `desc(createdAt), asc(id)`-
+      style tie-break (2.3) is what makes LIMIT/OFFSET pages stable.
+      `src/lib/services/product-listing.ts`'s `getFilteredProductListing`
+      changed return type from `ProductListingItem[]` to
+      `{ items, hasNextPage }` (`ProductListingPage`) — it requests
+      `limit: PRODUCTS_PAGE_SIZE + 1, offset: (filters.page - 1) *
+PRODUCTS_PAGE_SIZE` from the repo and slices the extra row off itself
+      to compute `hasNextPage` without a second COUNT query. All existing
+      callers/tests migrated to destructure `.items`.
+      New `src/components/product-pagination.tsx` — plain Prev/Next `<a>`
+      links (no client JS), hrefs built via `filtersToSearchParams({
+    ...filters, page: n })` so every active filter round-trips onto both
+      links; renders nothing when there's only one page. Wired into
+      `products/page.tsx` below `ProductGrid`.
+      Tests: 6 new cases in `product-filters.test.ts` (page parsing/
+      defaulting/serialization), 2 new repo tests in `products.test.ts`
+      (LIMIT/OFFSET + id tie-break with 5 same-`createdAt` products scoped
+      to a throwaway category so cross-file DB pollution can't affect it,
+      plus an offset-defaults-to-0 case), 2 new service tests in
+      `product-listing.test.ts` (`hasNextPage` false on a single page;
+      `page` 2 with `PRODUCTS_PAGE_SIZE + 1` seeded rows proving the filter
+      carries across pages and the boundary is exact), 6 new component
+      tests in `product-pagination.test.tsx` (incl. axe), 1 new integration
+      test in `products/page.test.tsx` (25 rows in a category, `?page=2`
+      renders the 1 spillover item with a working, filter-preserving
+      Previous link and no Next link).
+      AC met, verified two ways: the test suite above, and a real
+      `next dev` server — seeded 25 published products in a throwaway
+      category via `docker exec psql`, confirmed page 1 shows 24 with a
+      `Next` link to `...&page=2`, page 2 shows the 1 remaining item with a
+      `Previous` link back to `...&category=...` (no `page` param, since
+      page 1 is the default) and no `Next` link, and page 3 renders the
+      normal "No products match your filters." empty state (not a crash) —
+      each rendering the category filter correctly preserved. Scratch data
+      removed from the dev DB afterward. `npm run verify` green: 26 files,
+      199 tests, 99.49/98.41/100/99.47% coverage (products.ts and every
+      touched service/component file at 100%), build passes,
+      `/products` still `ƒ` (dynamic).
+      NOTE — real bug caught mid-implementation, worth remembering: an
+      earlier version of this task tried to reuse a single `pageSize` value
+      for both the repo's LIMIT and its OFFSET-per-page math, passing
+      `pageSize: PRODUCTS_PAGE_SIZE + 1` from the service to get the
+      hasNextPage peek row "for free." That's wrong — offset needs to
+      advance by the _real_ page size (24) while limit needs to be one
+      larger (25), and a single shared value can't be both. It silently
+      skipped an entire page's worth of rows on `page=2` (offset became
+      `(2-1)*25=25` against a 25-row result set, returning nothing). Caught
+      by the service-level pagination test, not the repo-level one — the
+      repo tests passed explicit small `pageSize` values per page and never
+      exercised the peek-trick's page-2 arithmetic. This is why the repo
+      API ended up as raw `limit`/`offset` instead of `page`/`pageSize`:
+      the primitive that can't silently conflate two different numbers is
+      safer than the convenient one. If a future task adds `page`/`pageSize`
+      sugar on top of the repo again, keep the peek's limit and the
+      stride's offset computed from two independent size values, not one.
+      NOTE — dev-DB pollution risk considered and mitigated: this repo's
+      integration tests share one live dev database across
+      concurrently-run vitest files (12 workers on this sandbox's CPU
+      count), and the pre-2.4 filter/listing tests got away with `toContain`
+      assertions against an _unpaginated_ result set regardless of what
+      else was in the database at that instant. Pagination changes that —
+      a LIMIT-24 query scoped to "all published products" could
+      legitimately drop a test's own row off page 1 if enough _other_
+      concurrently-running test files' published products momentarily
+      outrank it in `desc(createdAt)` order. Every new pagination test
+      above scopes its query to a throwaway category (or, for the two
+      largest tests, accepts the O(25) product-creation cost) specifically
+      so pagination correctness never depends on how many other published
+      products exist elsewhere in the shared database at test time. Any
+      future test against `listPublishedProductsFiltered`/
+      `getFilteredProductListing` with an explicit `page`/`limit` should
+      follow the same category-scoping pattern, not just `toContain`.
 
 - [ ] **2.5 Product detail page**
       Deps: 1.3, 2.1. Gallery, variant selector, price that updates with variant,

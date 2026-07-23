@@ -16,6 +16,12 @@ export const PRODUCT_SORT_VALUES = [
 export type ProductSort = (typeof PRODUCT_SORT_VALUES)[number];
 
 const DEFAULT_SORT: ProductSort = "newest";
+const DEFAULT_PAGE = 1;
+
+// Products per listing page. Shared by the repo's LIMIT/OFFSET and the
+// service's next-page lookahead (fetches one extra row past this size to
+// decide `hasNextPage` without a separate COUNT query) — see fix_plan 2.4.
+export const PRODUCTS_PAGE_SIZE = 24;
 
 export type ProductFilters = {
   categorySlugs: string[];
@@ -25,6 +31,7 @@ export type ProductFilters = {
   maxPriceCents: number | undefined;
   inStockOnly: boolean;
   sort: ProductSort;
+  page: number;
 };
 
 // Next's App Router gives a single string for a param that appears once and
@@ -32,6 +39,11 @@ export type ProductFilters = {
 export type RawSearchParams = Record<string, string | string[] | undefined>;
 
 const sortSchema = z.enum(PRODUCT_SORT_VALUES);
+const pageSchema = z
+  .string()
+  .trim()
+  .transform((value) => Number(value))
+  .pipe(z.number().int().positive());
 const facetValueSchema = z.string().trim().min(1);
 // Whole or fractional dollars in the URL; stored internally as integer
 // cents, matching AGENT.md's money rule.
@@ -74,6 +86,11 @@ function parseSort(raw: string | string[] | undefined): ProductSort {
   return result.success ? result.data : DEFAULT_SORT;
 }
 
+function parsePage(raw: string | string[] | undefined): number {
+  const result = pageSchema.safeParse(firstValue(raw));
+  return result.success ? result.data : DEFAULT_PAGE;
+}
+
 export function parseProductFilters(raw: RawSearchParams): ProductFilters {
   return {
     categorySlugs: parseFacetValues(raw.category),
@@ -86,6 +103,7 @@ export function parseProductFilters(raw: RawSearchParams): ProductFilters {
     // presence is the whole signal, not the value's content.
     inStockOnly: raw.inStock !== undefined,
     sort: parseSort(raw.sort),
+    page: parsePage(raw.page),
   };
 }
 
@@ -108,5 +126,6 @@ export function filtersToSearchParams(
   }
   if (filters.inStockOnly) params.set("inStock", "true");
   if (filters.sort !== DEFAULT_SORT) params.set("sort", filters.sort);
+  if (filters.page !== DEFAULT_PAGE) params.set("page", String(filters.page));
   return params;
 }

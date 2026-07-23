@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { ProductFiltersForm } from "@/components/product-filters-form";
 import { ProductGrid } from "@/components/product-grid";
+import { ProductPagination } from "@/components/product-pagination";
 import {
   getFilteredProductListing,
   getFilterFacets,
@@ -35,7 +36,7 @@ export default async function ProductsPage({
     filters.maxPriceCents !== undefined ||
     filters.inStockOnly;
 
-  const [products, facets] = await Promise.all([
+  const [{ items: products, hasNextPage }, facets] = await Promise.all([
     getFilteredProductListing(filters),
     getFilterFacets(),
   ]);
@@ -64,6 +65,7 @@ export default async function ProductsPage({
               ) : undefined
             }
           />
+          <ProductPagination filters={filters} hasNextPage={hasNextPage} />
         </div>
       </div>
     </div>

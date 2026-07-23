@@ -533,4 +533,104 @@ describe("listPublishedProductsFiltered", () => {
     expect(item?.priceFromCents).toBe(1234);
     expect(item?.inStock).toBe(true);
   });
+
+  it("paginates with LIMIT/OFFSET, tie-broken by id so pages neither drop nor duplicate items when sorting on a non-unique key", async () => {
+    // A dedicated category scopes the query to exactly these 5 products,
+    // isolating the test from any other published products a concurrently
+    // running test file might momentarily have in the shared dev database.
+    const category = await createCategory({
+      slug: "test-filter-page-category",
+      name: "Page Category",
+    });
+    insertedCategoryIds.push(category.id);
+
+    // Identical createdAt for every product forces the default "newest"
+    // sort into a full tie, so the only thing that can produce a stable,
+    // non-overlapping page split is the id tie-break.
+    const sameCreatedAt = new Date("2024-01-01T00:00:00Z");
+    const created = [];
+    for (let i = 0; i < 5; i++) {
+      const product = await makeProduct(`test-filter-page-${i}`, {
+        createdAt: sameCreatedAt,
+      });
+      await linkProductCategory(product.id, category.id);
+      created.push(product);
+    }
+    const expectedIds = created.map((p) => p.id).sort();
+
+    const page1 = await listPublishedProductsFiltered({
+      categorySlugs: [category.slug],
+      limit: 2,
+      offset: 0,
+    });
+    const page2 = await listPublishedProductsFiltered({
+      categorySlugs: [category.slug],
+      limit: 2,
+      offset: 2,
+    });
+    const page3 = await listPublishedProductsFiltered({
+      categorySlugs: [category.slug],
+      limit: 2,
+      offset: 4,
+    });
+
+    expect(page1.map((p) => p.id)).toEqual(expectedIds.slice(0, 2));
+    expect(page2.map((p) => p.id)).toEqual(expectedIds.slice(2, 4));
+    expect(page3.map((p) => p.id)).toEqual(expectedIds.slice(4, 5));
+
+    // Concatenating every page reproduces the full unpaginated set exactly
+    // once each, in order — the "no duplicate or dropped items" AC.
+    expect([...page1, ...page2, ...page3].map((p) => p.id)).toEqual(
+      expectedIds,
+    );
+  });
+
+  it("defaults offset to 0 when limit is given without an explicit offset", async () => {
+    const category = await createCategory({
+      slug: "test-filter-limit-no-offset-category",
+      name: "Limit No Offset Category",
+    });
+    insertedCategoryIds.push(category.id);
+    const sameCreatedAt = new Date("2024-01-01T00:00:00Z");
+    const created = [];
+    for (let i = 0; i < 3; i++) {
+      const product = await makeProduct(`test-filter-limit-no-offset-${i}`, {
+        createdAt: sameCreatedAt,
+      });
+      await linkProductCategory(product.id, category.id);
+      created.push(product);
+    }
+    const expectedFirstTwoIds = created
+      .map((p) => p.id)
+      .sort()
+      .slice(0, 2);
+
+    const result = await listPublishedProductsFiltered({
+      categorySlugs: [category.slug],
+      limit: 2,
+    });
+
+    expect(result.map((p) => p.id)).toEqual(expectedFirstTwoIds);
+  });
+
+  it("returns every match, unpaginated, when limit is not given", async () => {
+    const category = await createCategory({
+      slug: "test-filter-no-page-category",
+      name: "No Page Category",
+    });
+    insertedCategoryIds.push(category.id);
+    for (let i = 0; i < 3; i++) {
+      const product = await makeProduct(`test-filter-no-page-${i}`);
+      await linkProductCategory(product.id, category.id);
+    }
+
+    const result = await listPublishedProductsFiltered({
+      categorySlugs: [category.slug],
+      offset: 1,
+    });
+
+    // offset without limit is an edge case no caller currently exercises,
+    // but should still behave sanely rather than being silently ignored.
+    expect(result).toHaveLength(3);
+  });
 });

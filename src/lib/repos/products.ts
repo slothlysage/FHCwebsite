@@ -102,6 +102,16 @@ export type ProductListFilters = {
   maxPriceCents?: number;
   inStockOnly?: boolean;
   sort?: ProductSort;
+  // Raw LIMIT/OFFSET, deliberately not a `page` number — the service layer
+  // owns translating a 1-based page into these (and fetches one extra row
+  // past the real page size to compute `hasNextPage` without a separate
+  // COUNT query, which is exactly why offset and limit can't be derived
+  // from the same "page size" value). Omitting `limit` returns every match,
+  // unpaginated — existing callers that never set it keep that behavior.
+  // Still tie-broken on id so page boundaries stay stable regardless of
+  // sort column (specs/03-storefront.md).
+  limit?: number;
+  offset?: number;
 };
 
 export type FilteredProduct = Product & {
@@ -242,7 +252,7 @@ export async function listPublishedProductsFiltered(
     }
   })();
 
-  const rows = await db
+  const baseQuery = db
     .select({
       product: products,
       priceFromCents: variantAgg.priceFromCents,
@@ -252,6 +262,11 @@ export async function listPublishedProductsFiltered(
     .leftJoin(variantAgg, eq(variantAgg.productId, products.id))
     .where(and(...conditions))
     .orderBy(...orderBy);
+
+  const rows =
+    filters.limit !== undefined
+      ? await baseQuery.limit(filters.limit).offset(filters.offset ?? 0)
+      : await baseQuery;
 
   return rows.map((row) => ({
     ...row.product,

@@ -21,7 +21,10 @@ import {
   getFilteredProductListing,
   getFilterFacets,
 } from "@/lib/services/product-listing";
-import { parseProductFilters } from "@/lib/validation/product-filters";
+import {
+  parseProductFilters,
+  PRODUCTS_PAGE_SIZE,
+} from "@/lib/validation/product-filters";
 
 const defaultFilters = parseProductFilters({});
 
@@ -66,7 +69,7 @@ describe("getFilteredProductListing", () => {
     const archived = await makeProduct("test-listing-archived", "archived");
     const published = await makeProduct("test-listing-published");
 
-    const listing = await getFilteredProductListing(defaultFilters);
+    const { items: listing } = await getFilteredProductListing(defaultFilters);
     const ids = listing.map((item) => item.id);
 
     expect(ids).not.toContain(draft.id);
@@ -104,7 +107,7 @@ describe("getFilteredProductListing", () => {
       reason: "adjustment",
     });
 
-    const listing = await getFilteredProductListing(defaultFilters);
+    const { items: listing } = await getFilteredProductListing(defaultFilters);
     const item = listing.find((p) => p.id === product.id);
 
     expect(item?.priceFromCents).toBe(1000);
@@ -130,7 +133,7 @@ describe("getFilteredProductListing", () => {
       reason: "sale",
     });
 
-    const listing = await getFilteredProductListing(defaultFilters);
+    const { items: listing } = await getFilteredProductListing(defaultFilters);
     const item = listing.find((p) => p.id === product.id);
 
     expect(item?.inStock).toBe(false);
@@ -151,7 +154,7 @@ describe("getFilteredProductListing", () => {
       reason: "adjustment",
     });
 
-    const listing = await getFilteredProductListing(defaultFilters);
+    const { items: listing } = await getFilteredProductListing(defaultFilters);
     const item = listing.find((p) => p.id === product.id);
 
     expect(item?.inStock).toBe(true);
@@ -160,7 +163,7 @@ describe("getFilteredProductListing", () => {
   it("has no price and is out of stock when a product has no active variants", async () => {
     const product = await makeProduct("test-listing-no-variants");
 
-    const listing = await getFilteredProductListing(defaultFilters);
+    const { items: listing } = await getFilteredProductListing(defaultFilters);
     const item = listing.find((p) => p.id === product.id);
 
     expect(item?.priceFromCents).toBeNull();
@@ -187,7 +190,7 @@ describe("getFilteredProductListing", () => {
       },
     ]);
 
-    const listing = await getFilteredProductListing(defaultFilters);
+    const { items: listing } = await getFilteredProductListing(defaultFilters);
     const withImageItem = listing.find((p) => p.id === withImage.id);
     const withoutImageItem = listing.find((p) => p.id === withoutImage.id);
 
@@ -207,7 +210,7 @@ describe("getFilteredProductListing", () => {
     const outOfCategory = await makeProduct("test-listing-service-filter-out");
     await linkProductCategory(inCategory.id, category.id);
 
-    const listing = await getFilteredProductListing({
+    const { items: listing } = await getFilteredProductListing({
       ...defaultFilters,
       categorySlugs: [category.slug],
     });
@@ -219,6 +222,80 @@ describe("getFilteredProductListing", () => {
     await db
       .delete(productCategories)
       .where(eq(productCategories.productId, inCategory.id));
+    await db.delete(categories).where(eq(categories.id, category.id));
+  });
+
+  it("reports hasNextPage: false when every match fits on one page", async () => {
+    // Scoped to a dedicated category so this isn't at the mercy of however
+    // many published products other concurrently running test files happen
+    // to have in the shared dev database at this instant.
+    const category = await createCategory({
+      slug: "test-listing-page-single-category",
+      name: "Page Single Category",
+    });
+    const product = await makeProduct("test-listing-page-single");
+    await linkProductCategory(product.id, category.id);
+
+    const { items, hasNextPage } = await getFilteredProductListing({
+      ...defaultFilters,
+      categorySlugs: [category.slug],
+    });
+
+    expect(items.map((i) => i.id)).toContain(product.id);
+    expect(hasNextPage).toBe(false);
+
+    await db
+      .delete(productCategories)
+      .where(eq(productCategories.categoryId, category.id));
+    await db.delete(categories).where(eq(categories.id, category.id));
+  });
+
+  it("page 2 preserves the active filters and returns the slice after page 1, with hasNextPage flipping to false once exhausted", async () => {
+    const category = await createCategory({
+      slug: "test-listing-page-2-category",
+      name: "Page 2 Category",
+    });
+    // One more product than PRODUCTS_PAGE_SIZE, all with the same
+    // createdAt so the default "newest" sort is a full tie, exercising the
+    // id tie-break the same way the repo-level pagination test does.
+    const sameCreatedAt = new Date("2024-01-01T00:00:00Z");
+    const created = [];
+    for (let i = 0; i < PRODUCTS_PAGE_SIZE + 1; i++) {
+      const product = await createProduct({
+        slug: `test-listing-page-2-${i}`,
+        name: `test-listing-page-2-${i}`,
+        status: "published",
+        createdAt: sameCreatedAt,
+      });
+      insertedProductIds.push(product.id);
+      await linkProductCategory(product.id, category.id);
+      created.push(product);
+    }
+    const expectedIds = created.map((p) => p.id).sort();
+
+    const page1 = await getFilteredProductListing({
+      ...defaultFilters,
+      categorySlugs: [category.slug],
+      page: 1,
+    });
+    const page2 = await getFilteredProductListing({
+      ...defaultFilters,
+      categorySlugs: [category.slug],
+      page: 2,
+    });
+
+    expect(page1.items.map((i) => i.id)).toEqual(
+      expectedIds.slice(0, PRODUCTS_PAGE_SIZE),
+    );
+    expect(page1.hasNextPage).toBe(true);
+    expect(page2.items.map((i) => i.id)).toEqual(
+      expectedIds.slice(PRODUCTS_PAGE_SIZE),
+    );
+    expect(page2.hasNextPage).toBe(false);
+
+    await db
+      .delete(productCategories)
+      .where(eq(productCategories.categoryId, category.id));
     await db.delete(categories).where(eq(categories.id, category.id));
   });
 });
