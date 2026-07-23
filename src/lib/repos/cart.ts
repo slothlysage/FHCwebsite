@@ -26,6 +26,20 @@ export async function listCartItemsByCartId(
   return executor.select().from(cartItems).where(eq(cartItems.cartId, cartId));
 }
 
+export async function getCartItem(
+  cartId: string,
+  variantId: string,
+  executor: DbExecutor = db,
+): Promise<CartItem | undefined> {
+  const [item] = await executor
+    .select()
+    .from(cartItems)
+    .where(
+      and(eq(cartItems.cartId, cartId), eq(cartItems.variantId, variantId)),
+    );
+  return item;
+}
+
 // Sets the item's quantity to exactly the given value — not an increment.
 // Callers (the cart service) decide the final quantity after their own
 // stock-clamping logic, so this only needs to persist it. onConflictDoUpdate

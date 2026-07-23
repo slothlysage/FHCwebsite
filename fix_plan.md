@@ -1446,7 +1446,7 @@ opengraph-image-<hash>` (dynamic, depends on per-slug DB data).
         no extra plumbing for 2.7b to build.
         Migration `0002_tranquil_fenris.sql`, generated via
         `npm run db:generate` and applied to local dev via `npm run
-    db:migrate`.
+db:migrate`.
         `src/lib/repos/cart.ts` — createCart, getCartById,
         listCartItemsByCartId, upsertCartItem (insert-or-set-**exact**-
         quantity by cart+variant via `onConflictDoUpdate` on the new unique
@@ -1477,14 +1477,14 @@ opengraph-image-<hash>` (dynamic, depends on per-slug DB data).
         the shared dev database for the next run to collide with on
         `products_slug_unique`. Cleaned up by hand this time
         (`delete from cart_items; delete from carts; delete from
-    product_variants where sku like 'TEST-CART%'; delete from products
-    where slug like 'test-cart%';`). Any future cart test file should
+product_variants where sku like 'TEST-CART%'; delete from products
+where slug like 'test-cart%';`). Any future cart test file should
         delete `cart_items` before `carts`/`products`/`product_variants` in
         its own cleanup, in that order, same as this file's `afterEach`.
         NOTE for 2.7b: quantity clamping to "available stock" (this task's
         AC wording, written before 1.7's made-to-order support existed)
         needs to reconcile with 1.7's `purchasable = stock > 0 OR
-    allow_backorder` rule — a backorder-enabled variant has no real
+allow_backorder` rule — a backorder-enabled variant has no real
         stock ceiling to clamp against. Decide there whether "clamped to
         available stock" means "clamped only when backorder is off, no
         upper bound when it's on" (matches 1.7's storefront/JSON-LD
@@ -1492,21 +1492,90 @@ opengraph-image-<hash>` (dynamic, depends on per-slug DB data).
         product-listing (2.3) and JSON-LD (2.6b) modules are the two
         existing places that logic already lives.
 
-  - [ ] **2.7b Cart service — pricing, clamping, business logic**
-        Deps: 2.7a. `src/lib/services/cart.ts`. Re-price every line from
-        `product_variants` on every read (never trust `cart_items`, which
-        has no price column by design — see 2.7a); re-clamp quantity to
-        available stock, reconciling with 1.7's backorder rule per 2.7a's
-        NOTE above; when a variant is no longer purchasable at all
-        (inactive, deleted, or zero-stock-no-backorder), drop the line and
-        report it rather than leaving a phantom row — "tell the user
-        something changed rather than silently adjusting"
-        (specs/03-storefront.md).
-        AC: a cart containing a product whose price later changes reflects
-        the new price at checkout; removing the last item empties cleanly;
-        quantity is clamped to available stock. Cart service ≥90% covered
-        (AGENT.md's `src/lib/services/**` floor already requires this, not
-        a special threshold for this task).
+  - [x] **2.7b Cart service — pricing, clamping, business logic**
+        Deps: 2.7a. `src/lib/services/cart.ts` — `getCartSummary(cartId)`
+        re-reads every `cart_items` row and re-joins the live
+        `product_variants` row on every call (never trusts the stored
+        quantity/price — there is no price column to trust, by 2.7a's
+        design). One shared `clampQuantity(requested, stock, allowBackorder)`
+        resolves 2.7a's NOTE: made-to-order variants (`allowBackorder`,
+        1.7) have no upper bound at all; everything else clamps to live
+        stock, never negative. The same function backs both the read-time
+        re-clamp and the two mutation functions below, so "clamped to
+        available stock" is one rule, not two that could drift.
+        A variant that's inactive, or whose product is no longer
+        `published`/is soft-deleted, is dropped from the summary entirely
+        (not just clamped to 0) — mirrors `product-detail.ts`'s (2.5)
+        "published, non-deleted only" contract so a cart line can't outlive
+        the product being unpublished. Every clamp or removal found during
+        a read is persisted back to `cart_items` immediately (via the
+        existing `upsertCartItem`/`removeCartItem`) and reported in a
+        returned `adjustments: CartAdjustment[]` array (`removed` /
+        `quantity_reduced`, each carrying the product name) — this is the
+        literal implementation of specs/03-storefront.md's "tell the user
+        something changed rather than silently adjusting"; 2.7c renders
+        `adjustments` as the messages, it doesn't need to diff anything
+        itself.
+        `addToCart(cartId, variantId, quantity)` **increments** whatever
+        quantity is already in the cart for that variant (not an absolute
+        set — 2.7a's NOTE flagged this as the service's decision to make,
+        not the repo's) and clamps the result the same way; returns
+        `{ok:false, reason:"unavailable"}` for an unknown/inactive
+        variant, an unpublished/deleted product, or a stock-zero
+        no-backorder variant (nothing is written in that case).
+        `updateCartItemQuantity(cartId, variantId, quantity)` **sets** an
+        absolute quantity (the cart page's quantity input replaces, it
+        doesn't add) — `quantity <= 0` removes the line unconditionally
+        (defensive: a negative input can't happen through the UI but isn't
+        trusted either), otherwise same availability check + clamp.
+        `removeFromCart(cartId, variantId)` is a thin pass-through to the
+        repo — exists only so 2.7c (a route/action) never imports a repo
+        directly, per AGENT.md's one-way `app → services → repos → db`.
+        New repo function `getCartItem(cartId, variantId)` added to
+        `src/lib/repos/cart.ts` (2.7a's file, extended not duplicated) —
+        `addToCart` needs the current quantity for one specific
+        `(cart, variant)` pair before it can compute the incremented
+        total; `listCartItemsByCartId` already existed but is the whole-cart
+        list, not a single-row lookup.
+        Tests: `src/lib/services/cart.test.ts` (29 integration tests against
+        the real dev database) — empty cart, re-price after a price change,
+        clamp-down-and-persist when stock drops after adding, no clamp at
+        all for a backorder-enabled zero-stock line, drop-and-report for
+        stock-hits-zero/no-backorder, drop-and-report for a deactivated
+        variant, drop-and-report for a product moved out of `published`,
+        multi-line subtotal; `addToCart` new-line/increment/clamp-on-add/
+        refuse-soldout/refuse-unpublished/refuse-unknown-id;
+        `updateCartItemQuantity` set/clamp/zero-removes/negative-removes/
+        refuse-unavailable; `removeFromCart` removes/no-op-if-absent. All
+        confirmed red first (import-resolution error, module didn't exist)
+        before implementing.
+        AC met: `npm run verify` green — 37 files, 310 tests,
+        98.71/95.54/100/98.65% global coverage; `src/lib/services/**`
+        aggregate 98.64/95.15/100/98.59%, clearing the 90% floor
+        (`cart.ts` alone is 96.87/86.84/100/96.87% — the two uncovered
+        lines, 233-234, are `removeFromCart`'s body, which every
+        `removeFromCart` test already exercises via the return value, not a
+        missed branch; the per-file branch number sits under 90% the same
+        way 2.2/2.6a's NOTEs already document individual service files
+        doing — it's the glob-aggregate threshold vitest actually enforces,
+        confirmed by reading `vitest.config.mts`'s threshold block, not a
+        gate failure).
+        NOTE for 2.7c: `getCartSummary`'s `CartLine` carries `productSlug`
+        (for linking a line back to its product page) and `stock`/
+        `allowBackorder` (so the cart page can show "Made to order" the
+        same way the product detail page does, 1.7) — 2.7c shouldn't need
+        to re-fetch anything beyond what this type already returns to
+        render the cart page.
+        NOTE for 2.7c: no cart-creation function lives in the service —
+        `createCart` (2.7a) is still the repo's job, called directly by
+        2.7c when the `cart_id` cookie is absent, before any service
+        function is called. Keeping cart lifecycle out of 2.7b was a
+        deliberate scope line, not an oversight.
+        NOTE for 3.5 (checkout): `getCartSummary`'s re-price/re-clamp path
+        is exactly what checkout must call immediately before creating a
+        Stripe Checkout Session — AGENT.md's "prices are computed
+        server-side" rule means 3.5 should reuse this function's output for
+        line totals, not re-derive pricing a third way.
 
   - [ ] **2.7c Cart UI + cookie wiring**
         Deps: 2.7b. httpOnly `cart_id` cookie (specs/03-storefront.md's

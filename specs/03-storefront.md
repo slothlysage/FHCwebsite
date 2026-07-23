@@ -263,6 +263,32 @@ cart. On every read, re-price line items from the database and re-clamp
 quantities to available stock — then tell the user if something changed rather
 than silently adjusting.
 
+### Implementation notes (2.7b, `src/lib/services/cart.ts`)
+
+- `getCartSummary(cartId)` is the single read path: re-joins live
+  `product_variants` for price/stock on every call, persists any clamp or
+  removal it finds back to `cart_items`, and returns them in an
+  `adjustments: CartAdjustment[]` array (`removed` / `quantity_reduced`) —
+  this array _is_ "tell the user something changed," not a side channel the
+  UI has to compute itself.
+- One clamp rule for the whole cart, not per-caller: made-to-order variants
+  (`allowBackorder`, see 1.7) have no upper bound; everything else clamps to
+  live stock, floor zero. Zero-or-below after clamping means the line is
+  dropped, not left as a zero-quantity row.
+- A variant is only purchasable if it's active AND its product is
+  `published` and not soft-deleted — same contract `product-detail.ts` (2.5)
+  already enforces. A cart line for a variant/product that falls out of
+  that contract (deactivated, unpublished, deleted) is dropped and reported
+  the same way a stock-out is.
+- `addToCart` **increments** the existing line's quantity; `updateCartItemQuantity`
+  **sets** an absolute quantity (and removes the line at `<= 0`). This split
+  exists because `cart_items`' repo-level `upsertCartItem` (2.7a) only ever
+  sets an exact value — the service owns the "add more" vs. "set to N"
+  decision, the repo does not.
+- 3.5 (checkout) should call `getCartSummary` for its line totals rather than
+  re-deriving pricing/stock a third way — it's the same "prices computed
+  server-side" rule AGENT.md states for order totals.
+
 ## Empty and error states
 
 Every list has an empty state. Every async action has a pending state. Every
