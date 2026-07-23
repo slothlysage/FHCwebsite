@@ -466,16 +466,43 @@ emptied via a new `deleteCartItemsByCartId` repo function (deletes
 `cart_items` rows only — the `carts` row itself survives, since the
 `cart_id` cookie keeps pointing at it for the customer's next visit).
 
-**Not yet one atomic transaction — by design, not an oversight.** This
-task's AC ("replaying the same event twice creates exactly one order and
-decrements inventory once") holds because `handleStripeWebhookEvent` never
-calls `fulfillCheckoutSession` more than once per Stripe event id (the
-`webhook_events` guard), not because the order+items/inventory/cart-clear
-writes inside `fulfillCheckoutSession` already commit or roll back
-together. Wrapping them in one `withTransaction` call (already exists,
-`src/lib/repos/transaction.ts`, built for exactly this in 1.4b) plus the
-explicit partial-failure rollback test is fix_plan.md task 3.5's whole job
-— the same "decide, then harden" split as 1.4a/1.4b and 3.2a/3.2b.
+**Now one atomic transaction (task 3.5).** `fulfillCheckoutSession` wraps
+the order+items insert, every line's inventory movement, and the cart-clear
+in a single `withTransaction` call (`src/lib/repos/transaction.ts`, built
+for exactly this in 1.4b) — a failure at any point (e.g. an inventory
+movement write) rolls back the order and its items too, leaving no orphaned
+rows. This is on top of, not instead of, 3.4's own AC ("replaying the same
+event twice creates exactly one order and decrements inventory once"),
+which still holds via `handleStripeWebhookEvent`'s `webhook_events`
+event-id guard — `fulfillCheckoutSession` never runs twice for the same
+Stripe event regardless of transaction boundaries.
+
+`repos/orders.ts`'s `createOrder` gained a third, optional `executor`
+parameter (`DbExecutor`, defaulting to `db`) so it can participate in a
+caller's transaction instead of always opening its own: called with no
+executor it still wraps its own order+items insert in `db.transaction`
+(unchanged behavior, exercised by `orders.test.ts`'s existing atomicity
+test), but called with a `tx` (as `order-fulfillment.ts` now does) it just
+runs both inserts against that `tx` directly, participating in the
+caller's transaction rather than nesting a second one. `recordMovement`
+(inventory.ts) and `deleteCartItemsByCartId` (cart.ts) already accepted an
+optional executor from earlier tasks, so no changes were needed there.
+
+**Regression test:** `order-fulfillment.test.ts`'s "rolls back the order,
+order items, and cart clear when the inventory movement write fails" spies
+`recordMovement` to reject once, then asserts — via direct queries against
+the real dev database — that the order was never created, stock is
+unaffected, and the cart still has its item. Confirmed this test fails
+against the pre-3.5 code (the order persisted despite the injected
+inventory-write failure, since the four writes ran outside any shared
+transaction) before making it pass. A real FK-violation (the technique
+`orders.test.ts`'s own atomicity test uses) wasn't available here: by the
+time a cart line reaches `fulfillCheckoutSession`, `getCartSummary` has
+already re-verified the variant is real and active, so there's no
+naturally-occurring bad value left to construct a genuine constraint
+violation from at the inventory-movement step. Injecting the failure via a
+spy on a real dependency call, then verifying real DB state afterward, is
+the fault-injection technique used instead.
 
 **Testing — no msw needed for any of this.** Unlike 3.2b/3.3's
 Stripe-API-_calling_ code, nothing here makes an outbound Stripe request:

@@ -2098,11 +2098,42 @@ true}` (needs a Stripe Dashboard Tax origin address before a real,
       decision (a hand-damaged returned candle may not be resellable) better
       made in the admin refunds flow, not assumed here.
 
-- [ ] **3.5 Order creation + inventory decrement**
+- [x] **3.5 Order creation + inventory decrement**
       Deps: 3.4. Single database transaction: create order, create order items,
       write inventory movements, empty the cart.
       AC: a failure partway through rolls back entirely — no orphaned order rows,
       no phantom inventory movements. Test the failure path explicitly.
+      `src/lib/services/order-fulfillment.ts`'s `fulfillCheckoutSession` now
+      wraps the order+items insert, every line's `recordMovement` call, and
+      `deleteCartItemsByCartId` in one `withTransaction` (`src/lib/repos/
+transaction.ts`, from 1.4b) — 3.4 had these as four independent writes;
+      this task made them atomic.
+      `src/lib/repos/orders.ts`'s `createOrder` gained a third, optional
+      `executor: DbExecutor = db` param: with no executor it still opens its
+      own `db.transaction` (unchanged, so 1.3d's standalone atomicity test
+      needed no changes), but given a `tx` it runs both inserts against that
+      `tx` directly instead of nesting a second transaction — that's what
+      lets it participate in `fulfillCheckoutSession`'s outer transaction.
+      `recordMovement`/`deleteCartItemsByCartId` already took an optional
+      executor from earlier tasks; no changes needed there.
+      Test: new case in `order-fulfillment.test.ts` — spies `recordMovement`
+      to reject once (a real FK-violation-style forced failure, like 1.3d's
+      atomicity test uses, wasn't constructible here: `getCartSummary`
+      already re-verifies every line's variant is real/active before
+      `fulfillCheckoutSession` ever runs, so there's no naturally-bad value
+      left over to violate a constraint with at the inventory-movement step
+      — a spy-based fault injection was the only way to force a failure at
+      that specific point), then asserts via direct DB queries that no order
+      was created, stock is unaffected, and the cart item survives.
+      Confirmed red first: ran this test against the pre-3.5 code and
+      observed the order persisting (found by session id) despite the
+      injected inventory-write rejection, since the four writes ran outside
+      any shared transaction — exactly the bug this task fixes.
+      AC met: `npm run verify` green — 49 files, 406 tests, 98.42/93.92/100/
+      98.36% global coverage (`src/lib/services/**` aggregate 97.65/90.55/
+      100/97.58 clears its 90% floor), build passes.
+      See `specs/05-payments.md`'s updated "Implementation notes (3.4)"
+      section for the full detail.
 
 - [ ] **3.6 Oversell guard**
       Deps: 3.5. Re-check stock at session creation and again at webhook time.

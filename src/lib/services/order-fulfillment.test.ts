@@ -185,4 +185,34 @@ describe("fulfillCheckoutSession", () => {
     expect(order).toBeUndefined();
     expect(errorSpy).toHaveBeenCalled();
   });
+
+  it("rolls back the order, order items, and cart clear when the inventory movement write fails", async () => {
+    const { cart, variant } = await makeCartWithStock(10);
+    const sessionId = `cs_test_${randomUUID()}`;
+
+    const inventoryRepo = await import("@/lib/repos/inventory");
+    const recordMovementSpy = vi
+      .spyOn(inventoryRepo, "recordMovement")
+      .mockRejectedValueOnce(new Error("simulated failure"));
+
+    await expect(
+      fulfillCheckoutSession(
+        fakeSession({ id: sessionId, metadata: { cart_id: cart.id } }),
+      ),
+    ).rejects.toThrow("simulated failure");
+
+    recordMovementSpy.mockRestore();
+
+    const order = await getOrderByStripeSessionId(sessionId);
+    expect(order).toBeUndefined();
+
+    const stock = await getStockForVariant(variant.id);
+    expect(stock).toBe(10); // sale movement never committed
+
+    const remainingCartItems = await db
+      .select()
+      .from(cartItems)
+      .where(eq(cartItems.cartId, cart.id));
+    expect(remainingCartItems).toHaveLength(1); // cart-clear rolled back too
+  });
 });

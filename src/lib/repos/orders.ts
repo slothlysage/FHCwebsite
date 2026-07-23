@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 
-import { db } from "@/lib/db/client";
+import { db, type DbExecutor } from "@/lib/db/client";
 import { orderItems, orders } from "@/lib/db/schema";
 
 type Order = typeof orders.$inferSelect;
@@ -8,11 +8,18 @@ type NewOrder = typeof orders.$inferInsert;
 type OrderStatus = Order["status"];
 type NewOrderItem = typeof orderItems.$inferInsert;
 
+// Accepts an optional executor (a `withTransaction` callback's `tx`) so a
+// caller with more writes to make atomic alongside this one — e.g.
+// order-fulfillment.ts's inventory decrement + cart clear — can thread its
+// own transaction through instead of getting a second, independent one.
+// Called with no executor (the default), this still opens its own
+// transaction so the order+items insert stays atomic on its own.
 export async function createOrder(
   order: NewOrder,
   items: Array<Omit<NewOrderItem, "orderId">>,
+  executor: DbExecutor = db,
 ): Promise<Order> {
-  return db.transaction(async (tx) => {
+  const insertOrderAndItems = async (tx: DbExecutor): Promise<Order> => {
     const [created] = await tx.insert(orders).values(order).returning();
     const createdOrder = created!;
 
@@ -23,7 +30,11 @@ export async function createOrder(
     }
 
     return createdOrder;
-  });
+  };
+
+  return executor === db
+    ? db.transaction(insertOrderAndItems)
+    : insertOrderAndItems(executor);
 }
 
 export async function getOrderById(id: string): Promise<Order | undefined> {
