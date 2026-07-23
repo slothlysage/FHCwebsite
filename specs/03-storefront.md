@@ -289,6 +289,68 @@ than silently adjusting.
   re-deriving pricing/stock a third way — it's the same "prices computed
   server-side" rule AGENT.md states for order totals.
 
+### Implementation notes (2.7c, cart UI + cookie wiring)
+
+- `src/lib/cart-cookie.ts` is the only module that imports `next/headers`.
+  `readCartId()` is read-only (safe from Server Components — the header and
+  the cart page both call it and never create a cart on a plain page load).
+  `writeCartId()` mutates the `Set-Cookie` header and only actually works
+  when called from a Server Action/Route Handler; Next enforces that at
+  runtime, not in the type system (`ReadonlyRequestCookies` still types
+  `.set`/`.delete` because they're needed by the mutable-context caller).
+- `src/lib/actions/cart.ts` — three Server Actions (`addToCartAction`,
+  `updateCartItemAction`, `removeCartItemAction`), one per cart mutation.
+  Deliberately placed under `lib/`, not `app/`: `VariantSelector`
+  (`src/components/variant-selector.tsx`) is a component and needs to import
+  the add-to-cart action directly, and components importing from `app/`
+  would invert AGENT.md's dependency direction. Each action parses its
+  `FormData` through `src/lib/validation/cart-form.ts` (zod, permissive —
+  same "malformed/missing → safe default, never throw" convention as
+  `product-filters.ts`; an invalid `variantId` makes the whole action a
+  no-op) before calling `getOrCreateCartId()` (reads the cookie, verifies
+  the cart it names still exists via `getCartById`, otherwise creates one
+  via `createCart` — the 2.7a NOTE's "createCart is the repo's job, called
+  directly by 2.7c" is implemented literally here) and then the
+  corresponding `lib/services/cart.ts` function. Every action finishes with
+  `revalidatePath("/", "layout")` since the header's cart count is rendered
+  on every route via the root layout, not just `/cart`.
+- Progressive enhancement is Next's Server Actions mechanism itself, not a
+  hand-rolled GET-form pattern like `ProductFiltersForm`/`VariantSelector`'s
+  own variant-picker: a `<form action={someServerAction}>` renders a real
+  `method="POST"` HTML form with a hidden `$ACTION_ID_...` field, so it
+  submits and works even with client JS disabled — verified live against a
+  running `next dev` server with raw `curl -F` POSTs (no browser JS
+  involved) reproducing the exact hidden-field set Next renders: add →
+  `cart_id` cookie set + header count updated; quantity update → subtotal
+  recalculated; remove → cart empties and header returns to 0.
+- `SiteHeader` (`src/components/site-header.tsx`) is now an async Server
+  Component: `readCartId()` then, if present, `getCartSummary(cartId).lines`
+  summed by quantity. No cart cookie yet reads as 0, not an error state.
+  Because it's rendered in the root layout on every route, and it calls
+  `cookies()`, **every route in the app is now dynamically rendered** — confirmed
+  via `next build`'s route table: `/` (still 0.1's placeholder pending 2.9)
+  and `/_not-found` both flipped from `○` to `ƒ`. `/opengraph-image` and
+  `/robots.txt` are unaffected (Next's metadata-route files don't render the
+  page/layout JSX tree at all, so they never call the header).
+  `SiteHeader` is invoked directly and awaited in its own tests
+  (`render(await SiteHeader())`), same pattern as every async
+  Server Component page test in this repo.
+- Cart page (`src/app/(storefront)/cart/page.tsx`): renders
+  `getCartSummary`'s `adjustments` as a `role="status"` list above the line
+  items (the literal "tell the user something changed" UI, 2.7b already did
+  the hard part), each line's own quantity `<form>`/remove `<form>`, and the
+  spec's required empty state ("Your cart is empty." + a link to
+  `/products`) when there are no lines — including the case where every line
+  got dropped by a same-request adjustment (a fully-clamped-to-nothing cart
+  shows both the adjustment message and the empty state, not a stale line).
+- Not built in this task, flagged for whoever needs it: no client-side
+  pending/loading indicator (e.g. `useFormStatus`) on any of the three
+  forms. Browsers show their own native "submitting" affordance for a real
+  form POST regardless, so nothing is silently broken — but the spec's
+  general "every async action has a pending state" rule isn't fully met by
+  a plain submit button. Revisit if checkout (phase 3) or a future pass
+  wants a nicer in-page spinner.
+
 ## Empty and error states
 
 Every list has an empty state. Every async action has a pending state. Every

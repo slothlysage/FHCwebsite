@@ -1,7 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { axe } from "jest-axe";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+
+// addToCartAction is a "use server" Server Action (lib/actions/cart.ts) — it
+// isn't invokable at all outside a real Next request, so unit tests for this
+// client component mock it the same way they'd mock any other network
+// boundary and assert only that the form/button wiring is correct, not that
+// the action's own business logic runs (that's lib/actions/cart.test.ts's
+// and lib/services/cart.test.ts's job, both against the real dev database).
+vi.mock("@/lib/actions/cart", () => ({ addToCartAction: vi.fn() }));
 
 import { VariantSelector } from "./variant-selector";
 import type { ProductDetailVariant } from "@/lib/services/product-detail";
@@ -113,7 +121,7 @@ describe("VariantSelector", () => {
     expect(form).toHaveAttribute("action", "/products/lavender-candle");
   });
 
-  it("renders an accessibly-disabled add-to-cart button (cart lands in 2.7)", () => {
+  it("enables add-to-cart for an in-stock variant", () => {
     render(
       <VariantSelector
         variants={variants}
@@ -122,7 +130,50 @@ describe("VariantSelector", () => {
       />,
     );
 
+    expect(screen.getByRole("button", { name: /add to cart/i })).toBeEnabled();
+  });
+
+  it("enables add-to-cart for a zero-stock, made-to-order variant", () => {
+    render(
+      <VariantSelector
+        variants={variants}
+        initialSku="sku-c"
+        productSlug="lavender-candle"
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /add to cart/i })).toBeEnabled();
+  });
+
+  it("disables add-to-cart for a zero-stock variant with no backorder", () => {
+    render(
+      <VariantSelector
+        variants={variants}
+        initialSku="sku-b"
+        productSlug="lavender-candle"
+      />,
+    );
+
     expect(screen.getByRole("button", { name: /add to cart/i })).toBeDisabled();
+  });
+
+  it("submits the selected variant's id to the add-to-cart action", async () => {
+    const { addToCartAction } = await import("@/lib/actions/cart");
+    const user = userEvent.setup();
+    render(
+      <VariantSelector
+        variants={variants}
+        initialSku="sku-a"
+        productSlug="lavender-candle"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /add to cart/i }));
+
+    expect(addToCartAction).toHaveBeenCalledTimes(1);
+    const submittedFormData = vi.mocked(addToCartAction).mock
+      .calls[0]![0] as FormData;
+    expect(submittedFormData.get("variantId")).toBe("1");
   });
 
   it("renders an unavailable message when a product has no active variants", () => {

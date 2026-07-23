@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { addToCartAction } from "@/lib/actions/cart";
 import { formatPriceCents } from "@/lib/format";
 import type { ProductDetailVariant } from "@/lib/services/product-detail";
 
@@ -98,15 +99,17 @@ export function VariantSelector({
           Update
         </button>
       </form>
-      <button
-        type="button"
-        disabled
-        aria-disabled="true"
-        title="Cart is coming soon"
-        className="mt-4 w-full rounded-md bg-clay px-4 py-2 text-sm font-medium text-cream disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        Add to cart
-      </button>
+      <form action={addToCartAction} className="mt-4">
+        <input type="hidden" name="variantId" value={selected.id} />
+        <input type="hidden" name="quantity" value="1" />
+        <button
+          type="submit"
+          disabled={selected.stock <= 0 && !selected.allowBackorder}
+          className="w-full rounded-md bg-clay px-4 py-2 text-sm font-medium text-cream disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Add to cart
+        </button>
+      </form>
     </div>
   );
 }

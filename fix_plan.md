@@ -1420,7 +1420,7 @@ dev` server hit with `curl` — `GET /opengraph-image` and
 opengraph-image-<hash>` (dynamic, depends on per-slug DB data).
         **Umbrella 2.6 is now fully `[x]`** (2.6a/b/c/d all done).
 
-- [ ] **2.7 Cart**
+- [x] **2.7 Cart**
       Deps: 2.5. Server-side cart keyed by an httpOnly cookie. Add, update qty,
       remove, persist across sessions. Line totals recomputed server-side on read.
       AC: a cart containing a product whose price later changes reflects the _new_
@@ -1428,7 +1428,7 @@ opengraph-image-<hash>` (dynamic, depends on per-slug DB data).
       to available stock. Cart service ≥90% covered.
       Split into sub-tasks below (schema/repo vs. business-logic vs. UI/cookie
       wiring — same multi-piece shape as 1.3/1.4/2.6's splits). This umbrella
-      item is ticked `[x]` only once all three below are `[x]`.
+      item is ticked `[x]` only once all three below are `[x]` — all three are done.
 
   - [x] **2.7a Cart schema + repo layer**
         Deps: 2.5. No `carts`/`cart_items` tables existed anywhere in
@@ -1577,7 +1577,7 @@ allow_backorder` rule — a backorder-enabled variant has no real
         server-side" rule means 3.5 should reuse this function's output for
         line totals, not re-derive pricing a third way.
 
-  - [ ] **2.7c Cart UI + cookie wiring**
+  - [x] **2.7c Cart UI + cookie wiring**
         Deps: 2.7b. httpOnly `cart_id` cookie (specs/03-storefront.md's
         "Cart" section), set on first add. Wire the product detail page's
         existing disabled "Add to cart" button (2.5's NOTE: it's a real
@@ -1585,10 +1585,92 @@ allow_backorder` rule — a backorder-enabled variant has no real
         this task can attach its own handler) and the header's hardcoded
         "Cart, 0 items" placeholder (2.1's NOTE). New cart page showing
         server-recomputed line items/totals.
-        AC: adding an item from the product page updates the header count;
-        the cart page reflects server-recomputed totals and clamped
-        quantities; works with JS disabled (progressive enhancement, same
-        GET-form pattern as 2.3/2.5).
+        `src/lib/cart-cookie.ts` — the only module importing `next/headers`:
+        `readCartId()` (read-only, safe from Server Components) and
+        `writeCartId()` (mutates the cookie, only valid inside a Server
+        Action/Route Handler). `src/lib/actions/cart.ts` — three Server
+        Actions (`addToCartAction`/`updateCartItemAction`/
+        `removeCartItemAction`), deliberately under `lib/` not `app/` so
+        `VariantSelector` (a component) can import the add-to-cart action
+        without a components → app dependency inversion. Each parses its
+        `FormData` through new `src/lib/validation/cart-form.ts` (zod,
+        permissive — same convention as `product-filters.ts`: a malformed/
+        missing quantity falls back to what the service already treats that
+        value as, an invalid `variantId` makes the whole action a no-op)
+        before calling a private `getOrCreateCartId()` (verifies the cookie's
+        cart still exists via `getCartById`, else creates one via 2.7a's
+        `createCart` — literally what that task's NOTE called for) and the
+        matching `lib/services/cart.ts` function, then
+        `revalidatePath("/", "layout")` since the header renders on every
+        route via the root layout.
+        Progressive enhancement here is Next's own Server Actions mechanism
+        (a `<form action={serverAction}>` is a real `method="POST"` HTML
+        form with a hidden `$ACTION_ID_...` field), not the hand-rolled
+        GET-form pattern `ProductFiltersForm`/`VariantSelector`'s own picker
+        use — verified live against `next dev` with raw `curl -F` POSTs
+        reproducing that exact hidden-field set with zero browser JS
+        involved (see spec for the full transcript: add sets the cookie and
+        bumps the header count, quantity-update recalculates the subtotal,
+        remove empties the cart and the header returns to 0).
+        `SiteHeader` (`src/components/site-header.tsx`) is now an async
+        Server Component reading `readCartId()` then summing
+        `getCartSummary(cartId).lines` by quantity; no cookie reads as 0.
+        Because it calls `cookies()` from the root layout, **every route is
+        now dynamically rendered** — confirmed via `next build`'s route
+        table: `/` and `/_not-found` flipped `○` → `ƒ` (unrelated to this
+        task's own DB dependencies, just a consequence of the header living
+        in the shared layout); `/opengraph-image`/`/robots.txt` are
+        unaffected since Next's metadata-route files never render the page/
+        layout tree. New `src/app/(storefront)/cart/page.tsx` renders
+        `adjustments` as a `role="status"` list (the literal "tell the user
+        something changed" UI — 2.7b already computed it), one
+        quantity-update `<form>` and one remove `<form>` per line, and the
+        spec's required empty state (including when every line was dropped
+        by a same-request adjustment, so the cart shows both the adjustment
+        message and the empty state together, not a stale line).
+        Tests: `cart-cookie.test.ts` (3 unit tests, `next/headers` mocked
+        with an in-memory `Map` store — the only reasonable way to test a
+        module whose entire job is wrapping a Next runtime API that throws
+        outside a real request); `lib/actions/cart.test.ts` (9 integration
+        tests against the real dev database — only `next/headers` (via the
+        cart-cookie mock) and `next/cache`'s `revalidatePath` are mocked,
+        every mutation is real: cookie created on first add, cookie reused
+        and quantity incremented on a second add, quantity defaults to 1
+        when the field is missing, a malformed `variantId` no-ops each of
+        the three actions without calling `revalidatePath`, update sets an
+        absolute quantity, update-to-0 removes the line, remove removes the
+        line); `cart/page.test.tsx` (6 integration tests — empty state with
+        no cookie, real line/subtotal rendering, a `removed` adjustment
+        message plus the empty state together, a `quantity_reduced`
+        adjustment message, made-to-order line label); `site-header.test.tsx`
+        migrated to the async-component-invocation pattern plus 1 new real-
+        DB test asserting a 3-item cart renders "Cart, 3 items";
+        `variant-selector.test.tsx` migrated (add-to-cart action mocked,
+        same reasoning as any other network-boundary mock) plus new cases:
+        enabled for in-stock, enabled for zero-stock-backorderable, disabled
+        for zero-stock-no-backorder, and a real click asserting the
+        submitted `FormData`'s `variantId` matches the selected variant. All
+        new test files confirmed red first (import-resolution errors);
+        modified test files confirmed each new/changed assertion failed
+        against the pre-change component before implementing.
+        AC met, verified two ways: the test suite above (40 files, 331
+        tests, 98.82/95.8/100/98.77% coverage — global 80% floor and the
+        `src/lib/services/**` 90% floor both clear easily), and the live
+        `next dev` + raw-`curl` walkthrough described above and in
+        `specs/03-storefront.md`, which is the actual proof of "works with
+        JS disabled" (no test harness here spins up a real browser with JS
+        turned off, so a real no-JS HTTP transcript is the correct
+        verification for this specific AC line, same reasoning 2.5 gave for
+        why its 404 checks needed a live-browser step too).
+        NOTE for 3.3 (checkout): `getCartSummary` is still the one function
+        that should feed checkout's line totals — nothing here changed that
+        contract from 2.7b's own NOTE.
+        NOTE for later polish (not blocking): no client-side pending
+        indicator (`useFormStatus`) on any of the three forms — browsers
+        show their own native submit-in-progress affordance regardless, so
+        nothing is silently broken, but the spec's general "every async
+        action has a pending state" rule isn't fully met by a bare submit
+        button.
 
 - [ ] **2.8 Content pages**
       Deps: 2.1. About, contact, FAQ, shipping, returns, privacy, terms.

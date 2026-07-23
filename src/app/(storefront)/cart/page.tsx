@@ -1,0 +1,146 @@
+import Link from "next/link";
+
+import { readCartId } from "@/lib/cart-cookie";
+import { formatPriceCents } from "@/lib/format";
+import { getCartSummary, type CartSummary } from "@/lib/services/cart";
+import { removeCartItemAction, updateCartItemAction } from "@/lib/actions/cart";
+
+// Reads cookies() (via readCartId) — Next opts this route into dynamic
+// rendering for that reason alone, but the explicit export documents intent
+// the same way every other catalog-dependent route in this app does
+// (AGENT.md: the database is the source of truth for catalog/inventory).
+export const dynamic = "force-dynamic";
+
+async function loadCartSummary(): Promise<CartSummary> {
+  const cartId = await readCartId();
+  if (!cartId) {
+    return { cartId: "", lines: [], subtotalCents: 0, adjustments: [] };
+  }
+  return getCartSummary(cartId);
+}
+
+function adjustmentMessage(
+  adjustment: CartSummary["adjustments"][number],
+): string {
+  if (adjustment.type === "removed") {
+    return `${adjustment.productName} is no longer available and was removed from your cart.`;
+  }
+  return `${adjustment.productName} quantity was reduced to ${adjustment.adjustedQuantity} (limited stock).`;
+}
+
+export default async function CartPage() {
+  const summary = await loadCartSummary();
+
+  return (
+    <div className="mx-auto w-full max-w-4xl px-4 py-10 sm:px-6">
+      <h1 className="text-2xl font-semibold tracking-tight text-ink">
+        Your cart
+      </h1>
+
+      {summary.adjustments.length > 0 && (
+        <ul
+          role="status"
+          className="mt-4 space-y-1 rounded-md border border-clay-dark/30 bg-clay/10 p-3 text-sm text-ink"
+        >
+          {summary.adjustments.map((adjustment) => (
+            <li key={adjustment.variantId}>{adjustmentMessage(adjustment)}</li>
+          ))}
+        </ul>
+      )}
+
+      {summary.lines.length === 0 ? (
+        <p className="mt-8 text-sm text-ink/70">
+          Your cart is empty.{" "}
+          <Link href="/products" className="underline hover:text-clay">
+            Continue shopping
+          </Link>
+          .
+        </p>
+      ) : (
+        <>
+          <ul className="mt-8 divide-y divide-sand">
+            {summary.lines.map((line) => (
+              <li
+                key={line.variantId}
+                className="flex flex-wrap items-center gap-4 py-4"
+              >
+                <div className="flex-1">
+                  <Link
+                    href={`/products/${line.productSlug}`}
+                    className="font-medium text-ink hover:text-clay"
+                  >
+                    {line.productName}
+                  </Link>
+                  <p className="text-sm text-ink/70">{line.variantName}</p>
+                  <p className="text-sm text-ink/70">
+                    {formatPriceCents(line.priceCents)} each
+                  </p>
+                  {line.stock <= 0 && line.allowBackorder && (
+                    <p className="text-xs text-clay-dark">Made to order</p>
+                  )}
+                </div>
+
+                <form
+                  action={updateCartItemAction}
+                  className="flex items-end gap-2"
+                >
+                  <input
+                    type="hidden"
+                    name="variantId"
+                    value={line.variantId}
+                  />
+                  <div>
+                    <label
+                      htmlFor={`quantity-${line.variantId}`}
+                      className="block text-xs font-medium text-ink"
+                    >
+                      Quantity
+                    </label>
+                    <input
+                      id={`quantity-${line.variantId}`}
+                      type="number"
+                      name="quantity"
+                      min={0}
+                      defaultValue={line.quantity}
+                      className="mt-1 w-16 rounded-md border border-ink/20 px-2 py-1.5 text-sm"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    className="rounded-md border border-ink/20 px-3 py-1.5 text-sm"
+                  >
+                    Update
+                  </button>
+                </form>
+
+                <form action={removeCartItemAction}>
+                  <input
+                    type="hidden"
+                    name="variantId"
+                    value={line.variantId}
+                  />
+                  <button
+                    type="submit"
+                    aria-label={`Remove ${line.productName} from cart`}
+                    className="text-sm font-medium text-clay-dark underline"
+                  >
+                    Remove
+                  </button>
+                </form>
+
+                <p className="w-24 text-right text-sm font-medium text-ink">
+                  {formatPriceCents(line.lineTotalCents)}
+                </p>
+              </li>
+            ))}
+          </ul>
+
+          <div className="mt-6 flex justify-end gap-4 text-lg font-semibold text-ink">
+            <span>Subtotal</span>
+            <span>{formatPriceCents(summary.subtotalCents)}</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
