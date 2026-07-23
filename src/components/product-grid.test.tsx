@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { axe } from "jest-axe";
 import { render, screen } from "@testing-library/react";
+import Link from "next/link";
 import { ProductGrid } from "./product-grid";
 import type { ProductListingItem } from "@/lib/services/product-listing";
 
@@ -50,7 +51,7 @@ describe("ProductGrid", () => {
       <ProductGrid
         products={[]}
         emptyMessage="No products match your filters."
-        emptyAction={<a href="/products">Clear filters</a>}
+        emptyAction={<Link href="/products">Clear filters</Link>}
       />,
     );
     expect(

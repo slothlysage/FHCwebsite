@@ -144,6 +144,50 @@ candles, safety warnings, care instructions, shipping summary.
 Variant selection updates the URL (`?variant=sku`) so a specific variant is
 linkable.
 
+## Implementation notes (2.5 — product detail)
+
+- `src/lib/services/product-detail.ts`'s `getProductDetail(slug)` returns
+  `null` — not a thrown error — for an unknown slug **and** for a slug that
+  resolves to a draft/archived/soft-deleted product. The page's `notFound()`
+  call doesn't distinguish the two cases, deliberately: a guessed URL for an
+  unpublished product must 404 exactly like a nonexistent one, or the 404
+  itself becomes a way to enumerate which slugs are "real but not live yet."
+- There is no `burn_time` (or any other single-value candle/body-butter fact)
+  column on `products`. It's a `product_attributes` row with `key =
+"burn_time"`, the same open-ended mechanism 2.3 already uses for the
+  `scent`/`size` filter facets — `getProductDetail` groups every attribute
+  row for the product by key into `Record<string, string[]>` and the page
+  only renders a "Burn time" field when `attributes.burn_time` is present.
+  Any future single-fact display field should follow this pattern rather
+  than adding a schema column.
+- Variant selection is deliberately **not** wired through
+  `next/navigation`'s `router.push`/`router.replace`. Doing so would
+  re-fetch the page's RSC payload from the server on every change, which is
+  exactly the "full reload" the AC forbids. Instead
+  `src/components/variant-selector.tsx` (`"use client"`) keeps the selected
+  variant in local React state (driving the displayed price/stock/shipping
+  weight) and calls `window.history.replaceState` directly to keep the
+  `?variant=sku` URL in sync for linkability, with no navigation at all.
+- The variant `<select>` still lives inside a real `<form method="GET"
+action="/products/[slug]">` with an always-visible "Update" submit
+  button — same progressive-enhancement shape as `ProductFiltersForm`
+  (2.3). With JS, the `onChange` handler makes the button redundant for the
+  common case but it still works if clicked (a real GET navigation to
+  `?variant=sku`, server-rendered by the page's own `searchParams` parsing).
+  Without JS, that button is the only way to submit the selection — this is
+  what makes the AC's "page works with JS disabled for the read-only
+  content" true for variant switching too, not just the static text below
+  the fold.
+- The gallery (`src/components/product-gallery.tsx`) renders every image at
+  once (primary large, rest as a thumbnail row) rather than a click-to-swap
+  single-image viewer — a swappable main image needs client JS or
+  duplicated/hidden markup, and nothing in 2.5's AC requires it. Revisit if
+  a future task wants that interaction specifically.
+- The "Add to cart" button exists now (disabled, `title="Cart is coming
+soon"`) so 2.7 only has to attach behavior, not build layout. It's
+  `type="button"`, not `type="submit"`, and lives outside the variant
+  `<select>`'s own form so it won't fight that form's GET submission.
+
 ## Cart
 
 Server-side, keyed by an httpOnly `cart_id` cookie. Never trust a client-held

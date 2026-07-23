@@ -54,3 +54,16 @@ export async function listPrimaryImagesByProductIds(
 
   return primaryImages;
 }
+
+// Every image for one product, ordered for a gallery (lowest position
+// first) — unlike listPrimaryImagesByProductIds, this is for a single
+// product-detail page, not a batch listing-page lookup.
+export async function listImagesByProductId(
+  productId: string,
+): Promise<Image[]> {
+  return db
+    .select()
+    .from(productImages)
+    .where(eq(productImages.productId, productId))
+    .orderBy(productImages.position);
+}

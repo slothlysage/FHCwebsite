@@ -44,3 +44,16 @@ export async function listFilterableAttributeValues(
 
   return rows.map((row) => row.value);
 }
+
+// Every attribute row for one product, regardless of key — the product-
+// detail page (2.5) groups these by key (scent, size, burn_time, ...) to
+// display whichever open-ended facets a given product actually has.
+export async function listAttributesByProductId(
+  productId: string,
+): Promise<Attribute[]> {
+  return db
+    .select()
+    .from(productAttributes)
+    .where(eq(productAttributes.productId, productId))
+    .orderBy(productAttributes.key);
+}

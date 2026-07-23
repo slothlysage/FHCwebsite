@@ -5,6 +5,7 @@ import { db } from "@/lib/db/client";
 import { productImages, products } from "@/lib/db/schema";
 import { createProduct } from "@/lib/repos/products";
 import {
+  listImagesByProductId,
   listPrimaryImagesByProductIds,
   replaceProductImages,
 } from "@/lib/repos/images";
@@ -145,5 +146,40 @@ describe("images repo", () => {
   it("returns an empty map for an empty id list", async () => {
     const primary = await listPrimaryImagesByProductIds([]);
     expect(primary.size).toBe(0);
+  });
+
+  it("lists every image for a product ordered by position", async () => {
+    const product = await makeProduct("test-images-list-all");
+    await replaceProductImages(product.id, [
+      {
+        url: "https://example.com/second.jpg",
+        altText: "Second",
+        position: 2,
+        width: 0,
+        height: 0,
+      },
+      {
+        url: "https://example.com/first.jpg",
+        altText: "First",
+        position: 1,
+        width: 0,
+        height: 0,
+      },
+    ]);
+
+    const images = await listImagesByProductId(product.id);
+
+    expect(images.map((image) => image.url)).toEqual([
+      "https://example.com/first.jpg",
+      "https://example.com/second.jpg",
+    ]);
+  });
+
+  it("returns an empty array for a product with no images", async () => {
+    const product = await makeProduct("test-images-list-none");
+
+    const images = await listImagesByProductId(product.id);
+
+    expect(images).toEqual([]);
   });
 });

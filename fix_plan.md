@@ -830,7 +830,7 @@ PRODUCTS_PAGE_SIZE` from the repo and slices the extra row off itself
       callers/tests migrated to destructure `.items`.
       New `src/components/product-pagination.tsx` — plain Prev/Next `<a>`
       links (no client JS), hrefs built via `filtersToSearchParams({
-    ...filters, page: n })` so every active filter round-trips onto both
+  ...filters, page: n })` so every active filter round-trips onto both
       links; renders nothing when there's only one page. Wired into
       `products/page.tsx` below `ProductGrid`.
       Tests: 6 new cases in `product-filters.test.ts` (page parsing/
@@ -892,11 +892,133 @@ PRODUCTS_PAGE_SIZE` from the repo and slices the extra row off itself
       `getFilteredProductListing` with an explicit `page`/`limit` should
       follow the same category-scoping pattern, not just `toContain`.
 
-- [ ] **2.5 Product detail page**
-      Deps: 1.3, 2.1. Gallery, variant selector, price that updates with variant,
-      description, ingredients, weight/burn time, care and safety info, add-to-cart.
-      AC: selecting a variant updates price and stock without a full reload;
-      page works with JS disabled for the read-only content; 404 for unknown slug.
+- [x] **2.5 Product detail page**
+      Deps: 1.3, 2.1. `src/app/(storefront)/products/[slug]/page.tsx` — async
+      Server Component, `export const dynamic = "force-dynamic"` (same
+      rationale as 2.2's listing page; confirmed `ƒ` not `○` in `next
+build`'s route table).
+      New `src/lib/services/product-detail.ts` — `getProductDetail(slug)`
+      returns `null` for anything the storefront shouldn't reach by a
+      guessed URL (unknown slug, draft, archived, or soft-deleted — mirrors
+      2.2/2.3's "published, non-deleted only" contract), otherwise the full
+      product (description/ingredients/safetyInfo/careInfo verbatim from
+      `products`), every active variant (sorted by `position`, each with
+      live stock via the existing batch `getStockForVariants`), every image
+      (new repo fn, see below), and every `product_attributes` row grouped
+      by key into `Record<string, string[]>` (e.g. `{ scent: ["lavender"],
+burn_time: ["40 hours"] }` — there is no dedicated `burn_time` column;
+      candles that need one just get a `product_attributes` row with that
+      key, same open-ended mechanism 2.3 already uses for `scent`/`size`).
+      Two new repo functions, both following existing batch/single-item
+      conventions: `src/lib/repos/images.ts`'s `listImagesByProductId`
+      (single product, all images ordered by position — a gallery, unlike
+      `listPrimaryImagesByProductIds`'s one-per-product batch lookup for
+      listing cards) and `src/lib/repos/attributes.ts`'s
+      `listAttributesByProductId` (every key/value for one product,
+      unfiltered by key — unlike the existing
+      `listFilterableAttributeValues(key)` which is scoped to one key
+      across all products for the filter UI's facet options).
+      New `src/components/product-gallery.tsx` (server, no JS) — every
+      image is rendered at once (primary large, rest as a thumbnail row);
+      no click-to-swap main-image interaction, since that would need client
+      JS or duplicated markup and isn't required by the AC. Placeholder
+      shown for a product with zero images.
+      New `src/components/variant-selector.tsx` (`"use client"`) — the
+      interactive half of the page. A `<form method="GET"
+action={/products/[slug]}>` wrapping a `<select>` (pre-populated from
+      the initially-selected variant, one `<option>` per active variant)
+      plus an always-visible "Update" submit button — same progressive-
+      enhancement pattern as `ProductFiltersForm` (2.3): the GET-form
+      fallback isn't hidden behind a JS check, it's just also enhanced.
+      Selecting a variant updates local React state (price, stock, shipping
+      weight) instantly and calls `window.history.replaceState` to sync the
+      `?variant=sku` URL — deliberately NOT `next/navigation`'s
+      `router.replace`, which would re-fetch the RSC payload from the
+      server and violate the "without a full reload" AC. A disabled
+      "Add to cart" button is present (cart doesn't exist until 2.7) with a
+      `title="Cart is coming soon"` — real wiring is 2.7's job, not
+      guessed at here.
+      `products/[slug]/page.tsx` reads `?variant=` server-side too (for the
+      no-JS/first-paint case and for direct deep-links): looks up a
+      matching active variant by SKU, falls back to the first active
+      variant (by position) if the param is missing or doesn't match any
+      SKU on this product. Below the fold: a `<dl>` built from whichever of
+      description/ingredients/burn_time/safetyInfo/careInfo are actually
+      present (each optional — a body-butter product with no burn_time
+      attribute just doesn't get that row) plus a static "Ships within 1–2
+      business days" shipping-summary line.
+      404 handling: `next/navigation`'s `notFound()`, called for unknown
+      slugs and for slugs that exist but resolve to a non-published/
+      deleted product (draft-leakage-by-guessed-URL is a real bug class,
+      same principle as 06-testing.md's must-have #6 for the listing page,
+      so it's tested here too even though the AC only names "unknown
+      slug"). No custom `not-found.tsx` exists yet (that's 5.3), so this
+      renders Next's default 404 — sufficient for the AC ("404 for unknown
+      slug"), which is about status/behavior, not a branded error page.
+      Tests: `images.test.ts` (+2), `attributes.test.ts` (+2) for the new
+      repo functions; `product-detail.test.ts` (8 integration tests against
+      the real dev database — null for unknown/draft/deleted, full
+      assembly with images/variants/attributes, deactivated variants
+      excluded, zero-movement variant reads as 0 stock, variants sorted by
+      position regardless of insertion order, empty attributes object);
+      `product-gallery.test.tsx` (3 RTL + axe); `variant-selector.test.tsx`
+      (7 RTL + axe, including a `user-event` `selectOptions` interaction
+      asserting price/stock text change AND `window.location.search`
+      change with no navigation, an empty-variants "Currently unavailable"
+      state, and the disabled add-to-cart button); `products/[slug]/
+page.test.tsx` (6 integration tests, same "invoke the async Server
+      Component directly and await it" pattern as `products/page.test.tsx`
+      — full render, `?variant=` selecting a specific SKU, unknown
+      `?variant=` value falling back to the first variant, a burn_time
+      attribute rendering, and the two 404 cases asserted via
+      `.rejects.toThrow()` since `notFound()` throws a special digest error
+      that the real App Router turns into a 404 response — this test can't
+      spin up a full Next server, so asserting the throw is the correct
+      boundary for an integration test at this level, and the live-browser
+      check below is what proves the actual HTTP status).
+      AC met, verified two ways: the test suite above (30 files, 226 tests,
+      99.11/96.87/100/99.08% global coverage — `product-detail.ts` and
+      `product-gallery.tsx`/`variant-selector.tsx` individually clear the
+      90% services/component floor easily), and a real `next dev` server
+      hit with `curl` against a manually-seeded product (two variants, one
+      image, a `burn_time` attribute, one inventory movement): the base
+      page rendered name/description/ingredients/price/stock/burn_time/
+      image, `?variant=MTC-16OZ` server-rendered the $40.00 variant's price
+      instead of the default $24.00, `GET /products/no-such-slug-at-all`
+      returned HTTP 404, and flipping the seeded product to `status =
+'draft'` and re-requesting its real slug also returned HTTP 404 (not
+      leaked). Scratch data removed from the dev DB afterward. `npm run
+verify` green (lint, typecheck, test:coverage, build — `/products/
+[slug]` shows `ƒ` not `○` in the build's route table, confirming it
+      isn't statically prerendered).
+      Unrelated pre-existing lint failure fixed in passing:
+      `src/components/product-grid.test.tsx` had a raw `<a href="/products">`
+      in its "custom empty action" test, which `eslint-config-next`'s
+      `no-html-link-for-pages` rule started flagging only once this task's
+      new `/products/[slug]` route existed for the rule to cross-reference
+      against (confirmed via `git stash` that `main` lints clean without
+      this task's new page, and fails with the exact same error once it's
+      added back) — swapped the test's raw `<a>` for `next/link`'s `Link`,
+      identical test behavior, matching how the real app already builds
+      that same link in `products/page.tsx`.
+      NOTE for 2.6 (SEO): no `generateMetadata` was added to this page —
+      out of scope for 2.5's AC (which is about interactivity/no-reload/
+      404, not metadata), and 2.6 is explicitly where per-page metadata,
+      OG images, and JSON-LD land. Don't duplicate a partial metadata
+      implementation here first.
+      NOTE for 2.7 (cart): the "Add to cart" button is a real, visible,
+      disabled button — not a TODO comment — so the layout/spacing is
+      already correct when 2.7 wires it up. It has no `type="submit"`
+      inside the variant-select form (it's `type="button"`, outside any
+      form action) specifically so 2.7 can attach its own submit handler
+      without fighting the GET-form's own submit button.
+      NOTE for 4.3/4.4 (admin): `burn_time` (and any other candle/body-
+      butter-specific fact) is stored as a `product_attributes` row, the
+      same mechanism as the existing `scent`/`size` filter facets — there
+      is no dedicated schema column and none should be added for
+      single-value display-only facts like this one. The admin product
+      form will need a way to set arbitrary attribute keys, not just
+      scent/size.
 
 - [ ] **2.6 SEO + structured data**
       Deps: 2.5. Per-page metadata, OG images, `Product` + `Offer` JSON-LD,

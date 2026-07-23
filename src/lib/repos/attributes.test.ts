@@ -5,6 +5,7 @@ import { db } from "@/lib/db/client";
 import { productAttributes, products } from "@/lib/db/schema";
 import { createProduct } from "@/lib/repos/products";
 import {
+  listAttributesByProductId,
   listFilterableAttributeValues,
   setProductAttribute,
 } from "@/lib/repos/attributes";
@@ -70,5 +71,29 @@ describe("attributes repo", () => {
   it("returns an empty array for a key with no values", async () => {
     const values = await listFilterableAttributeValues("no-such-key-anywhere");
     expect(values).toEqual([]);
+  });
+
+  it("lists every attribute for a product regardless of key", async () => {
+    const product = await makeProduct("test-attr-list-by-product");
+    await setProductAttribute(product.id, "scent", "lavender");
+    await setProductAttribute(product.id, "burn_time", "40 hours");
+
+    const attributes = await listAttributesByProductId(product.id);
+
+    expect(attributes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "scent", value: "lavender" }),
+        expect.objectContaining({ key: "burn_time", value: "40 hours" }),
+      ]),
+    );
+    expect(attributes).toHaveLength(2);
+  });
+
+  it("returns an empty array for a product with no attributes", async () => {
+    const product = await makeProduct("test-attr-list-by-product-none");
+
+    const attributes = await listAttributesByProductId(product.id);
+
+    expect(attributes).toEqual([]);
   });
 });
