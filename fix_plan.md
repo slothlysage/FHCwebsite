@@ -566,7 +566,7 @@ import.test.ts` (5 integration tests against the real dev
       status-only change reports and applies `update`) — all confirmed red
       first (`status` undefined / action `unchanged`) before implementing.
       AC met, verified live: re-ran `npm run import-catalog --
-    tests/fixtures/catalog.csv --apply` — all 5 products diffed `[update]`
+  tests/fixtures/catalog.csv --apply` — all 5 products diffed `[update]`
       and flipped to `published` (psql-confirmed), and a real `next dev` +
       `curl /products` rendered all 5 product cards (each "Out of stock" —
       correct, the CSV has no `Variant Inventory Qty` column, so initial
@@ -577,6 +577,24 @@ import.test.ts` (5 integration tests against the real dev
       `inventory_movements` adjustment (admin UI, 4.4) or a future CSV with
       `Variant Inventory Qty` populated. Nothing is sellable until then,
       which is fine pre-checkout (cart is 2.7, payments are phase 3).
+
+- [ ] **1.6 Importer populates filter facets (attributes + categories)**
+      Deps: 1.5. Discovered during the 2026-07-22 repo sweep against the
+      real catalog: 2.3's filter UI facets are empty for imported data.
+      (a) `Option1 Name` is `Scent` in the real CSV but the importer only
+      uses `Option1/2/3 Value` for the variant _name_ — it never writes
+      `product_attributes` rows, so the scent facet
+      (`listFilterableAttributeValues("scent")`) has nothing to list.
+      Map each `OptionN Name`/`OptionN Value` pair (lowercased key) to a
+      `setProductAttribute` call per distinct value per product.
+      (b) The fixture CSV has no `Tags`, so zero categories exist — but it
+      does have `Type` (`Hair Care`, `Soap`, `Candles`, `Body Butter`).
+      Fall back to `Type` as a category when `Tags` is blank (Tags still
+      win when present, preserving current behavior).
+      AC: after re-importing `tests/fixtures/catalog.csv`, the /products
+      filter form lists a Scent facet with the 9 real scents and a
+      category facet with the 4 product types; re-import stays idempotent
+      (no duplicate attribute/category rows).
 
 ---
 
@@ -1184,6 +1202,21 @@ type="application/ld+json">` with schema.org `Product` (name,
       Deps: 2.1. About, contact, FAQ, shipping, returns, privacy, terms.
       AC: all footer links resolve; no lorem ipsum ships.
       🚦 HUMAN GATE — policy copy must be written/approved by the owner.
+
+- [ ] **2.9 Home page**
+      Deps: 2.2. Discovered during the 2026-07-22 repo sweep:
+      `specs/03-storefront.md`'s route table line 1 is `/` — "home:
+      featured products, brand story" — but no task ever replaced the 0.1
+      scaffold placeholder ("Storefront under construction"), and every
+      other route in that table is covered by 2.2/2.5/2.8. Featured
+      products can reuse `getFilteredProductListing` (e.g. newest N
+      published); the brand-story copy needs owner input (same human gate
+      as 2.8's About page — placeholder-free rule applies), but the
+      featured-products section and page structure can land now.
+      AC: `/` renders a featured-products section fed by the live catalog
+      (no hardcoded product data), links through to `/products` and
+      product detail pages, axe-clean, and no longer says "under
+      construction". Sitemap (2.6c) already plans to list `/`.
 
 ---
 
