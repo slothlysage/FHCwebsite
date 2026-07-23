@@ -124,3 +124,65 @@ recorded fixtures per the Testing section above.
 NOTE for 3.2+: import `{ stripe }` from `@/lib/stripe/client`, don't
 construct a second `new Stripe(...)` anywhere else — that would defeat the
 interlock and the pinned version for whichever call site skipped it.
+
+## Implementation notes (3.2a)
+
+`src/lib/services/stripe-sync.ts` — `planVariantSync(variant, currentPrice)`
+is the entire pure decision layer for catalog → Stripe sync, split out from
+the Stripe-API-calling apply step (3.2b) the same way `catalog-importer.ts`'s
+pure parser was split from `catalog-import.ts`'s DB-writing apply step (1.4a/
+1.4b). No Stripe SDK import, no DB import — so this sub-task needed no mocking
+infrastructure at all (no `stripe-mock`, no msw, nothing), unlike 3.2b which
+will.
+
+Inputs: `variant: { priceCents, isActive, stripePriceId }` (the three
+`product_variants` columns this decision needs) and `currentPrice:
+{ unitAmount, active } | null` — the live Stripe Price for
+`variant.stripePriceId`, which 3.2b is responsible for fetching before calling
+this function. `currentPrice` is meaningless (and ignored) when
+`stripePriceId` is `null`.
+
+Returns exactly one of four actions:
+
+- `skip` — variant is inactive. 3.2 only syncs active variants; an inactive
+  one is left alone entirely, synced or not.
+- `create` — no `stripePriceId` yet, **or** one is set but `currentPrice` is
+  `null` (the Stripe object couldn't be found — e.g. deleted out-of-band).
+  Both cases mean "no usable existing Stripe Product/Price to build on",
+  so 3.2b should create a fresh Product + Price in both.
+- `replace` — `stripePriceId` is set, a `currentPrice` was found, but it no
+  longer matches: either `unitAmount !== variant.priceCents` (a real price
+  change) or `currentPrice.active === false` (our stored id points at an
+  already-archived Price — likely a previous sync that wrote the new price id
+  but crashed before, or drift from a manual Stripe-dashboard edit). Either
+  way 3.2b creates a new Price on the _same_ underlying Stripe Product
+  (obtainable from the old Price's own `.product` field — no separate
+  `stripe_product_id` column was added to the schema for this, see below) and
+  archives the old one. Prices are immutable per this spec's Sync section —
+  never mutate one in place.
+- `noop` — `currentPrice` matches local state exactly (same amount, still
+  active). Nothing to do. This is what makes running sync twice produce no
+  duplicates: the second run finds every already-synced variant's
+  `stripePriceId` set and its Stripe Price unchanged.
+
+NOTE for 3.2b: deliberately no `stripe_product_id` column exists on
+`products` (`specs/02-data-model.md` was not changed for this). Each variant
+gets its own Stripe Product (one Price each), not one shared Product per our
+`products` row with many Prices — this avoids needing any new schema field,
+since the one Stripe object id this repo already persists
+(`product_variants.stripe_price_id`) is sufficient: a Stripe Price object
+carries its own Product id (`price.product`), so the `replace` action's
+"same underlying Product" requirement is satisfiable by reading that field
+off the already-fetched `currentPrice`, not by storing a second id locally.
+3.2b's fetch step should keep that `product` id around (not discarded) for
+exactly this reason.
+NOTE for 3.2b: scope the variants fetched from the DB to active variants of
+published, non-deleted products (mirrors `product-detail.ts`/
+`product-listing.ts`'s existing "published, non-deleted only" contract) —
+`planVariantSync`'s own `skip` branch only covers `is_active`, it has no way
+to see product status, so that filter belongs in 3.2b's query, not here.
+NOTE for 3.2b: this is also where the Stripe-mocking approach for this
+repo's unit tests gets decided (none exists yet) — `stripe-mock`, recorded
+fixtures, or msw intercepting `api.stripe.com`, per `AGENT.md`'s testing
+rules ("Mock at the network boundary (MSW), not by stubbing your own
+modules" and "use `stripe-mock` or recorded fixtures for unit tests").

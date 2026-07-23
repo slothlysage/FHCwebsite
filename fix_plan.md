@@ -1696,7 +1696,7 @@ allow_backorder` rule — a backorder-enabled variant has no real
       then one batch image lookup) minus the +1-row `hasNextPage` peek,
       which doesn't apply to a fixed-size highlight reel.
       `src/app/page.tsx` — now an async Server Component (`export const
-  dynamic = "force-dynamic"`, same rationale as every other
+dynamic = "force-dynamic"`, same rationale as every other
       catalog-backed route: 2.2/2.5/2.6c). Renders the real brand
       name/description already approved for SEO use in `layout.tsx`'s root
       `metadata` (not new marketing copy — reusing "Handmade candles, body
@@ -1752,7 +1752,7 @@ allow_backorder` rule — a backorder-enabled variant has no real
       unless `ALLOW_LIVE=true`.
       Installed `stripe@22.3.2`. New `src/lib/stripe/client.ts` — module-load
       singleton `stripe` built via `new Stripe(env.STRIPE_SECRET_KEY,
-    { apiVersion: STRIPE_API_VERSION })`, `STRIPE_API_VERSION` pinned to
+  { apiVersion: STRIPE_API_VERSION })`, `STRIPE_API_VERSION` pinned to
       `"2026-06-24.dahlia"` (the installed SDK's own compiled default, kept
       as an explicit literal rather than left to float). A guard function,
       `assertNotLiveModeUnlessAllowed`, runs once before construction and
@@ -1783,6 +1783,52 @@ allow_backorder` rule — a backorder-enabled variant has no real
       variants map to Stripe Prices. Sync is idempotent and stores Stripe ids back.
       AC: running sync twice creates no duplicates; a price change creates a new
       Price and archives the old one rather than mutating it.
+      Split into sub-tasks below (pure decision logic vs. the Stripe-API-calling
+      apply step — same "parse pure / apply I/O" split as 1.4a/1.4b: the decision
+      logic is fully unit-testable with no network mocking at all, and 3.2b is
+      where a Stripe-mocking approach for this repo's unit tests — msw vs.
+      stripe-mock vs. recorded fixtures, none exist here yet — actually gets
+      decided instead of guessed at here). This umbrella item is ticked `[x]`
+      only once both below are `[x]`.
+
+  - [x] **3.2a Pure sync-decision logic**
+        Deps: 3.1. `src/lib/services/stripe-sync.ts` — `planVariantSync(variant,
+    currentPrice)`. Given one variant's local state (`priceCents`,
+        `isActive`, `stripePriceId`) and, only when `stripePriceId` is already
+        set, the corresponding Stripe Price's current `unitAmount`/`active`
+        flag, decides exactly one action: `skip` (inactive variant), `create`
+        (no `stripePriceId` yet, or one is set but the Stripe Price can't be
+        found), `replace` (price changed, or the known Price is archived —
+        either way a new Price is needed and the old one gets archived), or
+        `noop` (already in sync). Pure function: no Stripe SDK import, no DB
+        import — no mocking infrastructure needed for this sub-task at all.
+        `src/lib/services/stripe-sync.test.ts` — 7 unit tests, one per
+        branch/edge-case combination (inactive short-circuits ahead of a
+        matching current price too; missing-Price-object and archived-Price
+        both drift cases; price-changed; exact match). Confirmed red first
+        (import-resolution error, module didn't exist) before implementing.
+        AC met: 100% statement/branch/function/line coverage on
+        `stripe-sync.ts` alone; full `npm run verify` green (42 files, 352
+        tests, 98.86/95.97/100/98.81% coverage — global 80% floor and the
+        `src/lib/services/**`/`src/lib/stripe/**` 90% floors all clear
+        easily), build passes.
+        See `specs/05-payments.md`'s new "Implementation notes (3.2a)" section
+        for the full decision table and NOTEs for 3.2b, including why no
+        `stripe_product_id` column was added to `products` (each variant gets
+        its own Stripe Product; a Price's own `.product` field is enough to
+        satisfy `replace`'s "same underlying Product" requirement) and that
+        3.2b is where the Stripe-mocking approach for unit tests actually
+        gets decided.
+
+  - [ ] **3.2b Stripe API apply + idempotent CLI**
+        Deps: 3.2a. Wires 3.2a's decisions to real Stripe Product/Price API
+        calls (fetch current Price for variants with a `stripePriceId`, create
+        Product+Price for `create`, create new Price + archive old for
+        `replace`) and writes `stripePriceId` back via the variants repo in
+        one pass over all active variants of published, non-deleted products.
+        Decide and document the Stripe-mocking approach for this repo's unit
+        tests here, plus a CLI entry point (`scripts/`-style, matching
+        `import-catalog.mts`'s precedent) for running the sync by hand.
 
 - [ ] **3.3 Checkout session**
       Deps: 2.7, 3.2. Build the session from the server-side cart. Collect shipping
