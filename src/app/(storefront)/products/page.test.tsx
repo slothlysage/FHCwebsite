@@ -10,7 +10,7 @@ import {
   PRODUCTS_PAGE_SIZE,
   type RawSearchParams,
 } from "@/lib/validation/product-filters";
-import ProductsPage from "./page";
+import ProductsPage, { generateMetadata } from "./page";
 
 // Integration test against a real Postgres (specs/06-testing.md) — the page
 // is an async Server Component, so it's invoked directly and awaited rather
@@ -154,5 +154,33 @@ describe("ProductsPage", () => {
     expect(
       screen.queryByRole("link", { name: /^next$/i }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("ProductsPage generateMetadata", () => {
+  function withParams(searchParams: RawSearchParams = {}) {
+    return generateMetadata({ searchParams: Promise.resolve(searchParams) });
+  }
+
+  it("is indexable with a self-referencing canonical when no filters are active", async () => {
+    const metadata = await withParams();
+    expect(metadata.alternates?.canonical).toBe("/products");
+    expect(metadata.robots).toBeUndefined();
+  });
+
+  it("stays indexable when only sort/page are set (not filters)", async () => {
+    const metadata = await withParams({ sort: "price_asc", page: "2" });
+    expect(metadata.robots).toBeUndefined();
+  });
+
+  it("is noindex when a facet filter is active", async () => {
+    const metadata = await withParams({ category: "candles" });
+    expect(metadata.robots).toEqual({ index: false, follow: true });
+    expect(metadata.alternates?.canonical).toBe("/products");
+  });
+
+  it("is noindex when a price filter is active", async () => {
+    const metadata = await withParams({ minPrice: "10" });
+    expect(metadata.robots).toEqual({ index: false, follow: true });
   });
 });

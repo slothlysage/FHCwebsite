@@ -129,3 +129,21 @@ export function filtersToSearchParams(
   if (filters.page !== DEFAULT_PAGE) params.set("page", String(filters.page));
   return params;
 }
+
+// True when any facet/price/in-stock filter narrows the listing below "every
+// published product" — i.e. this is a crawlable-duplicate slice of /products,
+// not the canonical listing itself. `sort` and `page` don't count: sort just
+// reorders the same result set, and `page` is deliberately excluded from this
+// check (see fix_plan 2.6a) rather than folded into a broader "any non-default
+// param" definition. Shared by the page body's empty-state copy and
+// `generateMetadata`'s `noindex` decision so the two can't drift apart.
+export function hasActiveFilters(filters: ProductFilters): boolean {
+  return (
+    filters.categorySlugs.length > 0 ||
+    filters.scents.length > 0 ||
+    filters.sizes.length > 0 ||
+    filters.minPriceCents !== undefined ||
+    filters.maxPriceCents !== undefined ||
+    filters.inStockOnly
+  );
+}

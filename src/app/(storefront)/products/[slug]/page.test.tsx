@@ -13,7 +13,7 @@ import { replaceProductImages } from "@/lib/repos/images";
 import { createProduct } from "@/lib/repos/products";
 import { createVariant } from "@/lib/repos/variants";
 import { setProductAttribute } from "@/lib/repos/attributes";
-import ProductDetailPage from "./page";
+import ProductDetailPage, { generateMetadata } from "./page";
 
 // Integration test against a real Postgres (specs/06-testing.md) — an async
 // Server Component, invoked and awaited directly rather than passed to
@@ -184,5 +184,42 @@ describe("ProductDetailPage", () => {
     await expect(
       withParams({ slug: "test-detail-page-draft" }),
     ).rejects.toThrow();
+  });
+});
+
+describe("ProductDetailPage generateMetadata", () => {
+  const insertedProductIds: string[] = [];
+
+  afterEach(async () => {
+    for (const productId of insertedProductIds.splice(0)) {
+      await db.delete(products).where(eq(products.id, productId));
+    }
+  });
+
+  it("uses the product name as the title and a canonical URL, with a truncated description", async () => {
+    const product = await createProduct({
+      slug: "test-detail-page-metadata",
+      name: "Lavender Candle",
+      description: "A calming candle.",
+      status: "published",
+    });
+    insertedProductIds.push(product.id);
+
+    const metadata = await generateMetadata({
+      params: Promise.resolve({ slug: "test-detail-page-metadata" }),
+    });
+
+    expect(metadata.title).toBe("Lavender Candle");
+    expect(metadata.description).toBe("A calming candle.");
+    expect(metadata.alternates?.canonical).toBe(
+      "/products/test-detail-page-metadata",
+    );
+  });
+
+  it("returns empty metadata for an unknown slug instead of throwing", async () => {
+    const metadata = await generateMetadata({
+      params: Promise.resolve({ slug: "no-such-slug-anywhere" }),
+    });
+    expect(metadata).toEqual({});
   });
 });

@@ -1,7 +1,9 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import { ProductGallery } from "@/components/product-gallery";
 import { VariantSelector } from "@/components/variant-selector";
+import { truncateForMeta } from "@/lib/format";
 import {
   getProductDetail,
   type ProductDetail,
@@ -10,6 +12,29 @@ import {
 // Catalog/stock change independently of deploys (AGENT.md) — same rationale
 // as /products (2.2): this route must never be statically prerendered.
 export const dynamic = "force-dynamic";
+
+// The canonical URL deliberately omits `?variant=` — the variant selector is
+// UI state layered on one resource, not a distinct page, so every variant of
+// a product shares one canonical rather than diluting signal across SKUs.
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}): Promise<Metadata> {
+  const { slug } = await params;
+  const detail = await getProductDetail(slug);
+  if (!detail) {
+    // The page component itself calls notFound() for this same case; an
+    // empty metadata object here just falls back to the root layout's
+    // defaults rather than duplicating the not-found decision.
+    return {};
+  }
+  return {
+    title: detail.name,
+    description: truncateForMeta(detail.description) ?? undefined,
+    alternates: { canonical: `/products/${detail.slug}` },
+  };
+}
 
 type DetailField = { label: string; value: string };
 

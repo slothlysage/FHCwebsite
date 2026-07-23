@@ -830,7 +830,7 @@ PRODUCTS_PAGE_SIZE` from the repo and slices the extra row off itself
       callers/tests migrated to destructure `.items`.
       New `src/components/product-pagination.tsx` — plain Prev/Next `<a>`
       links (no client JS), hrefs built via `filtersToSearchParams({
-  ...filters, page: n })` so every active filter round-trips onto both
+...filters, page: n })` so every active filter round-trips onto both
       links; renders nothing when there's only one page. Wired into
       `products/page.tsx` below `ProductGrid`.
       Tests: 6 new cases in `product-filters.test.ts` (page parsing/
@@ -1025,6 +1025,104 @@ verify` green (lint, typecheck, test:coverage, build — `/products/
       `sitemap.xml`, `robots.txt`, canonical URLs.
       AC: JSON-LD validates; sitemap lists every published product; filtered
       listing URLs are `noindex` to avoid crawl bloat.
+      Split into sub-tasks below (five distinct pieces of work bundled into
+      one bullet — same rationale as 1.3/1.4's splits). This umbrella item is
+      ticked `[x]` only once all four below are `[x]`.
+
+  - [x] **2.6a Per-page metadata, canonical URLs, noindex for filtered listings**
+        Deps: 2.5. `products/page.tsx` gains `generateMetadata` (title,
+        description, `alternates.canonical: "/products"` unconditionally —
+        a filtered/paginated listing is still the same logical resource, so
+        it self-consolidates rather than growing a canonical per query
+        string) plus `robots: { index: false, follow: true }` whenever any
+        facet/price/in-stock filter is active. `sort` and `page` do NOT
+        count as "active" for this purpose — sort just reorders the same
+        result set, and pagination pages of the plain listing are still
+        worth indexing; only a narrowing facet/price/in-stock filter makes
+        a page a crawlable near-duplicate.
+        `products/[slug]/page.tsx` gains `generateMetadata` (title = product
+        name, description = `truncateForMeta(detail.description)` — new pure
+        helper in `src/lib/format.ts`, collapses whitespace/newlines then
+        cuts at a word boundary under 160 chars with a trailing `…`,
+        following the same "small pure util" pattern as `formatPriceCents`;
+        returns `null` for a `null` description, matching `ProductDetail`'s
+        typing exactly rather than coercing to `""`), `alternates.canonical:
+    "/products/{slug}"` — deliberately without `?variant=`, since the
+        variant selector (2.5) is UI state on one resource, not a distinct
+        page, so switching variants must never change what search engines
+        treat as canonical. An unknown slug's `generateMetadata` returns
+        `{}` (falls back to the root layout's defaults) rather than
+        duplicating the `notFound()` decision the page component already
+        makes — Next calls both independently, and only the page component
+        actually needs to throw.
+        Extracted the existing inline "any filter active?" boolean —
+        previously duplicated as a five-line `||` chain directly in
+        `page.tsx`'s empty-state/clear-filters logic — into
+        `product-filters.ts`'s new exported `hasActiveFilters(filters)`, so
+        `generateMetadata`'s `noindex` decision and the page body's
+        empty-state copy share one definition instead of two that could
+        silently drift apart (e.g. someone adding a new facet to one branch
+        and forgetting the other).
+        Tests: 8 new cases in `product-filters.test.ts` (default/page-only/
+        sort-only are all "not active"; each facet type and each price
+        bound individually make it "active"); 5 new cases in `format.test.ts`
+        (null passthrough, short text unchanged, long text truncated to a
+        word boundary with `…`, newline collapsing); 4 new cases in
+        `products/page.test.tsx` (indexable + self-canonical by default,
+        stays indexable with only sort/page set, noindex for a facet filter,
+        noindex for a price filter); 2 new cases in `products/[slug]/
+page.test.tsx` (title/description/canonical for a real published
+        product, `{}` for an unknown slug). All new test files confirmed red
+        first (`generateMetadata`/`hasActiveFilters`/`truncateForMeta` not a
+        function) before implementing.
+        AC met: `npm run verify` green — 30 files, 244 tests, 99.14/96.33/
+        100/99.11% coverage (global 80% floor and the `src/lib/services/**`
+        90% floor both clear easily; the two newly-uncovered branches in
+        `[slug]/page.tsx`, lines 54/57, are the pre-existing
+        `safetyInfo`/`careInfo` optional-field branches from 2.5, unrelated
+        to this task), build passes, `/products` and `/products/[slug]`
+        still `ƒ` (dynamic) in the route table.
+        NOTE for 2.6b (JSON-LD): the canonical URL logic now lives in two
+        places (`generateMetadata` in each page) as a literal template
+        string (`` `/products/${detail.slug}` ``) — 2.6b's `Offer.url` should
+        reuse that same shape (and ideally the same `NEXT_PUBLIC_SITE_URL`-
+        prefixed absolute form sitemap/OG will also need in 2.6c/2.6d) rather
+        than re-deriving it a third way. If a third consumer shows up, that's
+        the signal to extract a small `productUrl(slug)` helper — two
+        call sites inline was not yet worth the abstraction.
+        NOTE for 2.6c (sitemap): `hasActiveFilters` is the right function to
+        reuse if the sitemap generator ever needs to reason about which
+        `/products` query variants exist — it should not need to, since the
+        sitemap only ever lists the bare canonical paths, but flagging the
+        connection in case scope grows.
+
+  - [ ] **2.6b `Product` + `Offer` JSON-LD**
+        Deps: 2.6a. `products/[slug]/page.tsx` renders a `<script
+    type="application/ld+json">` with schema.org `Product` (name,
+        description, image, sku) + nested `Offer` (price, `priceCurrency`,
+        `availability` derived from the selected variant's live stock, `url`
+        = the canonical product URL) for the initially-selected variant.
+        AC: the emitted JSON-LD parses as valid JSON and validates against
+        schema.org's `Product`/`Offer` required fields (name, image, offers
+        with price/priceCurrency/availability).
+
+  - [ ] **2.6c `sitemap.xml` + `robots.txt`**
+        Deps: 2.5. `src/app/sitemap.ts` (Next's `MetadataRoute.Sitemap`) —
+        static routes (`/`, `/products`) plus one entry per published,
+        non-deleted product via the existing products repo, each URL built
+        from `NEXT_PUBLIC_SITE_URL` + canonical path (no query strings).
+        `src/app/robots.ts` — disallow `/admin`, `/api`; reference the
+        sitemap.
+        AC: the sitemap lists every published product and none that are
+        draft/archived/deleted (integration-tested against the dev
+        database); `robots.txt` disallows admin/api routes.
+
+  - [ ] **2.6d OG images**
+        Deps: 2.6a. Dynamic per-product OG image (`next/og` /
+        `ImageResponse`) plus a static default for non-product pages;
+        wired into each page's `generateMetadata` via `openGraph.images`.
+        AC: the OG image route renders a valid image response and is
+        referenced in the product page's metadata.
 
 - [ ] **2.7 Cart**
       Deps: 2.5. Server-side cart keyed by an httpOnly cookie. Add, update qty,

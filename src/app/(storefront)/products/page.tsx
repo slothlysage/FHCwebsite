@@ -9,6 +9,7 @@ import {
   getFilterFacets,
 } from "@/lib/services/product-listing";
 import {
+  hasActiveFilters,
   parseProductFilters,
   type RawSearchParams,
 } from "@/lib/validation/product-filters";
@@ -18,9 +19,27 @@ import {
 // build would only ever show the snapshot from the last deploy.
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  title: "Shop",
-};
+// A filtered/sorted/paginated /products?... is still the same logical
+// resource as the plain listing, so it always self-canonicalizes to the
+// unfiltered path (fix_plan 2.6a) rather than growing one canonical per query
+// string. Filtered requests additionally get `noindex` — otherwise every
+// facet combination is a crawlable near-duplicate of the same page, which is
+// pure crawl-budget waste with no ranking benefit.
+export async function generateMetadata({
+  searchParams,
+}: {
+  searchParams: Promise<RawSearchParams>;
+}): Promise<Metadata> {
+  const filters = parseProductFilters(await searchParams);
+  return {
+    title: "Shop",
+    description: "Shop handmade candles, body butter, and self-care products.",
+    alternates: { canonical: "/products" },
+    ...(hasActiveFilters(filters)
+      ? { robots: { index: false, follow: true } }
+      : {}),
+  };
+}
 
 export default async function ProductsPage({
   searchParams,
@@ -28,13 +47,7 @@ export default async function ProductsPage({
   searchParams: Promise<RawSearchParams>;
 }) {
   const filters = parseProductFilters(await searchParams);
-  const hasActiveFilters =
-    filters.categorySlugs.length > 0 ||
-    filters.scents.length > 0 ||
-    filters.sizes.length > 0 ||
-    filters.minPriceCents !== undefined ||
-    filters.maxPriceCents !== undefined ||
-    filters.inStockOnly;
+  const filtersActive = hasActiveFilters(filters);
 
   const [{ items: products, hasNextPage }, facets] = await Promise.all([
     getFilteredProductListing(filters),
@@ -50,12 +63,12 @@ export default async function ProductsPage({
           <ProductGrid
             products={products}
             emptyMessage={
-              hasActiveFilters
+              filtersActive
                 ? "No products match your filters."
                 : "No products match right now — check back soon."
             }
             emptyAction={
-              hasActiveFilters ? (
+              filtersActive ? (
                 <Link
                   href="/products"
                   className="mt-2 inline-block text-sm underline"

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   filtersToSearchParams,
+  hasActiveFilters,
   parseProductFilters,
 } from "@/lib/validation/product-filters";
 
@@ -162,5 +163,52 @@ describe("filtersToSearchParams", () => {
   it("includes page when greater than 1", () => {
     const params = filtersToSearchParams(parseProductFilters({ page: "2" }));
     expect(params.get("page")).toBe("2");
+  });
+});
+
+describe("hasActiveFilters", () => {
+  it("is false for the default filters", () => {
+    expect(hasActiveFilters(parseProductFilters({}))).toBe(false);
+  });
+
+  it("is false when only page is set (pagination is not a filter)", () => {
+    expect(hasActiveFilters(parseProductFilters({ page: "2" }))).toBe(false);
+  });
+
+  it("is false when only sort is set (sort is not a filter)", () => {
+    expect(hasActiveFilters(parseProductFilters({ sort: "price_asc" }))).toBe(
+      false,
+    );
+  });
+
+  it("is true when a category facet is active", () => {
+    expect(hasActiveFilters(parseProductFilters({ category: "candles" }))).toBe(
+      true,
+    );
+  });
+
+  it("is true when a scent facet is active", () => {
+    expect(hasActiveFilters(parseProductFilters({ scent: "vanilla" }))).toBe(
+      true,
+    );
+  });
+
+  it("is true when a size facet is active", () => {
+    expect(hasActiveFilters(parseProductFilters({ size: "8oz" }))).toBe(true);
+  });
+
+  it("is true when a price bound is active", () => {
+    expect(hasActiveFilters(parseProductFilters({ minPrice: "10" }))).toBe(
+      true,
+    );
+    expect(hasActiveFilters(parseProductFilters({ maxPrice: "30" }))).toBe(
+      true,
+    );
+  });
+
+  it("is true when in-stock-only is active", () => {
+    expect(hasActiveFilters(parseProductFilters({ inStock: "true" }))).toBe(
+      true,
+    );
   });
 });
