@@ -1752,7 +1752,7 @@ dynamic = "force-dynamic"`, same rationale as every other
       unless `ALLOW_LIVE=true`.
       Installed `stripe@22.3.2`. New `src/lib/stripe/client.ts` — module-load
       singleton `stripe` built via `new Stripe(env.STRIPE_SECRET_KEY,
-  { apiVersion: STRIPE_API_VERSION })`, `STRIPE_API_VERSION` pinned to
+{ apiVersion: STRIPE_API_VERSION })`, `STRIPE_API_VERSION` pinned to
       `"2026-06-24.dahlia"` (the installed SDK's own compiled default, kept
       as an explicit literal rather than left to float). A guard function,
       `assertNotLiveModeUnlessAllowed`, runs once before construction and
@@ -1778,7 +1778,7 @@ dynamic = "force-dynamic"`, same rationale as every other
       here rather than constructing a second client that bypasses the
       interlock.
 
-- [ ] **3.2 Catalog → Stripe sync**
+- [x] **3.2 Catalog → Stripe sync**
       Deps: 1.3, 3.1. See `specs/05-payments.md`. Database is the source of truth;
       variants map to Stripe Prices. Sync is idempotent and stores Stripe ids back.
       AC: running sync twice creates no duplicates; a price change creates a new
@@ -1793,7 +1793,7 @@ dynamic = "force-dynamic"`, same rationale as every other
 
   - [x] **3.2a Pure sync-decision logic**
         Deps: 3.1. `src/lib/services/stripe-sync.ts` — `planVariantSync(variant,
-    currentPrice)`. Given one variant's local state (`priceCents`,
+currentPrice)`. Given one variant's local state (`priceCents`,
         `isActive`, `stripePriceId`) and, only when `stripePriceId` is already
         set, the corresponding Stripe Price's current `unitAmount`/`active`
         flag, decides exactly one action: `skip` (inactive variant), `create`
@@ -1820,15 +1820,72 @@ dynamic = "force-dynamic"`, same rationale as every other
         3.2b is where the Stripe-mocking approach for unit tests actually
         gets decided.
 
-  - [ ] **3.2b Stripe API apply + idempotent CLI**
-        Deps: 3.2a. Wires 3.2a's decisions to real Stripe Product/Price API
-        calls (fetch current Price for variants with a `stripePriceId`, create
-        Product+Price for `create`, create new Price + archive old for
-        `replace`) and writes `stripePriceId` back via the variants repo in
-        one pass over all active variants of published, non-deleted products.
-        Decide and document the Stripe-mocking approach for this repo's unit
-        tests here, plus a CLI entry point (`scripts/`-style, matching
-        `import-catalog.mts`'s precedent) for running the sync by hand.
+  - [x] **3.2b Stripe API apply + idempotent CLI**
+        Deps: 3.2a. `src/lib/services/stripe-catalog-sync.ts` —
+        `runStripeSync(options, variants?)` wires 3.2a's `planVariantSync` to
+        real Stripe Product/Price calls and writes `stripePriceId` back via
+        the variants repo. New `src/lib/repos/variants.ts` function
+        `listActiveVariantsOfPublishedProducts()` (active variants of
+        published, non-deleted products, carrying each product's name) is
+        the default variant source when `variants` isn't passed explicitly —
+        that default is what `scripts/sync-stripe.mts` (new, `npm run
+sync-stripe -- [--apply]`, mirrors `import-catalog.mts`'s dry-run-by-
+        default shape) actually uses; tests always pass an explicit array
+        instead (see below for why).
+        Mocking approach: **msw** (new devDependency), intercepting
+        `POST/GET /v1/products`, `POST/GET /v1/prices`, `POST /v1/prices/:id`
+        via a small in-memory fake, `tests/msw/stripe-server.ts`. Two real
+        gotchas hit and fixed, both now baked into `src/lib/stripe/
+client.ts`: (1) the Stripe SDK's default Node HTTP client defers
+        writing the request body until a `'socket'`/`secureConnect` event
+        msw's interceptor never emits, hanging every request forever —
+        fixed by switching the pinned client to `Stripe.createFetchHttpClient()`
+        (also the right call for Workers, which has no `http`/`https`
+        modules at all); (2) `FetchHttpClient` captures `globalThis.fetch`
+        once at construction time, so a static top-level test import of a
+        Stripe-calling module captures the _pre-mock_ fetch — fixed via
+        `vi.resetModules()` + a dynamic `import()` inside `beforeAll`, after
+        `stripeServer.listen()`, matching `client.test.ts`/`env.test.ts`'s
+        existing pattern for load-time-side-effect modules. See
+        `specs/05-payments.md`'s "Implementation notes (3.2b)" for the full
+        trace of both, including how the second one was caught: a real-
+        looking Stripe object id came back from what should have been a
+        mocked call.
+        Idempotency: every Stripe-object-creating call carries an explicit
+        `idempotencyKey` (`variant.id` + `priceCents` where the amount
+        matters), and `replace`'s write order (create new Price → archive
+        old → write DB) makes every crash point self-heal to the same final
+        state on retry — full trace in the spec.
+        Tests: `stripe-catalog-sync.test.ts` (8 integration tests against the
+        real dev DB with Stripe mocked via msw) — dry run touches nothing,
+        create, "Stripe can't find the stored price" treated as create,
+        genuine Stripe error propagates (not swallowed as missing), noop,
+        replace on price change, replace on an archived-but-same-amount
+        price, re-running twice creates no duplicates. Plus 1 new
+        `variants.test.ts` case for the new repo function. All confirmed red
+        first before implementing.
+        AC met: `npm run verify` green — 43 files, 361 tests,
+        98.5/95.33/100/98.44% global coverage (`src/lib/services/**`
+        aggregate 97.75/94.11/100/97.67%, clearing the 90% floor;
+        `stripe-catalog-sync.ts` alone is 89.28/84/100/89.28% — the
+        uncovered lines are the default-`variants`-argument branch, which
+        would require running against the real shared-catalog data to
+        exercise, and a defensive invariant-throw that `planVariantSync`'s
+        own contract makes unreachable in practice), build passes.
+        `npm run sync-stripe` (dry run) hand-verified against the real dev
+        DB: reports all 45 real catalog variants as `[create]`, zero Stripe
+        calls made (dry run only reads, and none had a `stripePriceId` yet).
+        `--apply` was **deliberately not run for real** in this task — same
+        HUMAN GATE reasoning 1.4b gave for the first catalog import, since it
+        creates real objects in the connected Stripe test account. See
+        "Blocked — needs human" below for a related, more urgent item: an
+        earlier debugging run of this task's test suite (before the two
+        gotchas above were fixed) _did_ create 51 real test-mode Stripe
+        Products/Prices for real (45 real catalog + 6 test-named) before the
+        bug was caught. The local DB side effect (those 45 real variants'
+        `stripe_price_id` briefly holding fake mock ids) was cleaned up
+        (reset to `null`); the 51 stray Stripe-side objects were not deleted
+        and still need an owner decision.
 
 - [ ] **3.3 Checkout session**
       Deps: 2.7, 3.2. Build the session from the server-side cart. Collect shipping
@@ -2146,6 +2203,38 @@ _(agent appends here; do not guess around a blocker)_
   (5 products / 45 variants, zero row errors) after a `db:reset` cleared
   stale rows from an older fixture. See 1.4b's closed gate note and new
   task 1.5.
+- **51 stray real Stripe test-mode Products/Prices from a 3.2b debugging
+  incident (2026-07-23), owner decision needed.** While building/testing
+  `runStripeSync` (`src/lib/services/stripe-catalog-sync.ts`), a msw-mocking
+  bug (see 3.2b's fix_plan entry and `specs/05-payments.md`'s "Implementation
+  notes (3.2b)" for the full trace — the Stripe SDK's `FetchHttpClient`
+  captures `globalThis.fetch` once at import time, before a test's
+  `stripeServer.listen()` had patched it) caused a handful of test runs to
+  silently hit the **real, connected Stripe test-mode account** instead of
+  the mock before it was caught. Confirmed via a live `GetProducts` list
+  call: 51 real Products exist that shouldn't — 45 named after the real
+  catalog (e.g. "8oz Body Butter — Cashmere", `prod_UwIT3RKaIOochd` and
+  siblings, all `created` within the same ~90-second window,
+  `livemode: false`) plus 6 named "Test {create,rerun,archived,replace,
+  noop,missing} — Test Variant" from the test suite's own fixtures. Each has
+  one associated Price. The local dev DB side effect (those same 45 real
+  variants' `stripe_price_id` columns briefly holding fake `price_test_N`
+  ids, overwritten by a later, correctly-mocked run) has already been
+  cleaned up — `update product_variants set stripe_price_id = null where sku
+like 'FC_%';` was run against the local dev DB, confirmed back to the
+  pre-incident state.
+  The 51 real Stripe-side objects were **not** touched — deleting/archiving
+  51 real objects in a real connected external account is exactly the kind
+  of action that needs owner sign-off first, not a unilateral cleanup mid-
+  loop. No financial/live-mode risk (test mode only), but it's real clutter
+  in whatever Stripe account this `.env.local` `STRIPE_SECRET_KEY` is
+  connected to. Options for the owner: (a) ignore — harmless test-mode
+  clutter with no cost, (b) archive/delete via the Stripe Dashboard (test
+  mode toggle → Products, filter by the names above), or (c) ask a future
+  iteration to do it via the Stripe API (`products.update(id, {active:
+false})` per product, since Prices can't be deleted once created, only
+  archived) — needs explicit authorization first per AGENT.md's live-system
+  caution, even for test mode.
 
 ## Done
 

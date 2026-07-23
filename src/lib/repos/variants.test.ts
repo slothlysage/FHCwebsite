@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { db } from "@/lib/db/client";
 import { productVariants, products } from "@/lib/db/schema";
-import { createProduct } from "@/lib/repos/products";
+import { createProduct, softDeleteProduct } from "@/lib/repos/products";
 import {
   createVariant,
   deactivateVariant,
@@ -11,6 +11,7 @@ import {
   getVariantBySku,
   listActiveVariantsByProductId,
   listActiveVariantsByProductIds,
+  listActiveVariantsOfPublishedProducts,
   listVariantsByProductId,
   updateVariant,
 } from "@/lib/repos/variants";
@@ -217,5 +218,64 @@ describe("variants repo", () => {
     const stillFound = await getVariantById(created.id);
     expect(stillFound?.id).toBe(created.id);
     expect(stillFound?.isActive).toBe(false);
+  });
+
+  it("lists active variants of published products for Stripe sync, carrying the product name", async () => {
+    const published = await createProduct({
+      slug: "test-variant-sync-published",
+      name: "Test Sync Published",
+      status: "published",
+    });
+    insertedProductIds.push(published.id);
+    const draft = await makeProduct("test-variant-sync-draft");
+    const deleted = await createProduct({
+      slug: "test-variant-sync-deleted",
+      name: "Test Sync Deleted",
+      status: "published",
+    });
+    insertedProductIds.push(deleted.id);
+
+    const activeOnPublished = await createVariant({
+      productId: published.id,
+      sku: "TEST-SYNC-PUBLISHED-ACTIVE",
+      name: "Active",
+      priceCents: 1000,
+      weightGrams: 100,
+    });
+    const inactiveOnPublished = await createVariant({
+      productId: published.id,
+      sku: "TEST-SYNC-PUBLISHED-INACTIVE",
+      name: "Inactive",
+      priceCents: 1000,
+      weightGrams: 100,
+    });
+    await deactivateVariant(inactiveOnPublished.id);
+    await createVariant({
+      productId: draft.id,
+      sku: "TEST-SYNC-DRAFT-ACTIVE",
+      name: "Draft Active",
+      priceCents: 1000,
+      weightGrams: 100,
+    });
+    await createVariant({
+      productId: deleted.id,
+      sku: "TEST-SYNC-DELETED-ACTIVE",
+      name: "Deleted Active",
+      priceCents: 1000,
+      weightGrams: 100,
+    });
+    await softDeleteProduct(deleted.id);
+
+    const listed = await listActiveVariantsOfPublishedProducts();
+    const listedSkus = listed.map((v) => v.sku);
+
+    expect(listedSkus).toContain("TEST-SYNC-PUBLISHED-ACTIVE");
+    expect(listedSkus).not.toContain("TEST-SYNC-PUBLISHED-INACTIVE");
+    expect(listedSkus).not.toContain("TEST-SYNC-DRAFT-ACTIVE");
+    expect(listedSkus).not.toContain("TEST-SYNC-DELETED-ACTIVE");
+
+    const found = listed.find((v) => v.sku === "TEST-SYNC-PUBLISHED-ACTIVE");
+    expect(found?.productName).toBe("Test Sync Published");
+    expect(found?.id).toBe(activeOnPublished.id);
   });
 });

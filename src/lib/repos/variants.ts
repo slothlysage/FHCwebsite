@@ -1,7 +1,7 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 
 import { db, type DbExecutor } from "@/lib/db/client";
-import { productVariants } from "@/lib/db/schema";
+import { productVariants, products } from "@/lib/db/schema";
 
 type Variant = typeof productVariants.$inferSelect;
 type NewVariant = typeof productVariants.$inferInsert;
@@ -91,6 +91,29 @@ export async function listActiveVariantsByProductIds(
   }
 
   return variantsByProduct;
+}
+
+// Active variants of published, non-deleted products only — the exact scope
+// Stripe catalog sync (3.2b) syncs. Carries the product name alongside each
+// variant since Stripe's Product display name is derived from it
+// (`${productName} — ${variant.name}`), and the calling service has no other
+// way to get it without a second query per variant.
+export async function listActiveVariantsOfPublishedProducts(): Promise<
+  Array<Variant & { productName: string }>
+> {
+  const rows = await db
+    .select({ variant: productVariants, productName: products.name })
+    .from(productVariants)
+    .innerJoin(products, eq(productVariants.productId, products.id))
+    .where(
+      and(
+        eq(productVariants.isActive, true),
+        eq(products.status, "published"),
+        isNull(products.deletedAt),
+      ),
+    );
+
+  return rows.map((row) => ({ ...row.variant, productName: row.productName }));
 }
 
 export async function updateVariant(
