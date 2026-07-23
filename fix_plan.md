@@ -618,7 +618,7 @@ tests/fixtures/catalog.csv --apply` — all 5 products diffed `[update]`
       (all 5 products `[unchanged]`, since this only added facet data);
       `listFilterableAttributeValues("scent")` returns exactly the 9 real
       scents; `listFilterableCategories()` returns `Body Butter, Hair
-  Care, Soap, candles` — 4 categories, matching the AC's "4 product
+Care, Soap, candles` — 4 categories, matching the AC's "4 product
       types" (the `Type` value `Candles` slugifies to `candles`, which
       collided with a category of that same slug/lower-name already
       created by an earlier iteration's `catalog-import.test.ts` runs —
@@ -1414,6 +1414,87 @@ stripe/**` 90% floor both clear; `product-json-ld.ts` itself 100%
       Deps: 3.3. Percentage and fixed-amount, expiry, usage cap, min-spend.
       AC: expired/exhausted codes are rejected server-side with a clear message;
       a code cannot be applied twice; validation is server-side only.
+
+---
+
+## Phase 3b — Subscription boxes and bookings
+
+See `specs/05b-billing-and-bookings.md` for the full model — amends
+`specs/00-overview.md`'s non-goals (subscriptions are now in scope; an
+in-house booking calendar is not). Sequenced after one-time Checkout
+(3.1–3.8) since both new offering types share its Stripe client, webhook
+endpoint, and order/inventory infrastructure, but deliberately **not**
+gated on Phase 4 (Admin portal) — see the spec's "Sequencing decision"
+section for why neither bookings nor fixed-content box plans need admin
+CRUD to exist first.
+
+- [ ] **3b.1 Service types + booking Checkout session**
+      Deps: 3.1. `service_types` table + repo. Checkout session in `payment`
+      mode, price server-derived from `service_types`, `metadata: {
+    service_type_id }`.
+      AC: a tampered client price/service id produces a session with the
+      correct server-derived amount (same mandatory test shape as 3.3).
+
+- [ ] **3b.2 Booking webhook + confirmation**
+      Deps: 3b.1, 3.4. Webhook branches on `metadata.service_type_id` within
+      `checkout.session.completed` (payment mode) to create a `bookings` row
+      (`pending_schedule`), distinct from a cart-metadata physical order.
+      Confirmation email via Resend: "we'll follow up by email to schedule."
+      AC: replaying the event creates exactly one booking; a cart-metadata
+      session and a booking-metadata session are never confused.
+
+- [ ] **3b.3 Box plans schema + CLI seed script**
+      Deps: 1.3. `box_plans` + `box_plan_items` tables/repos. CLI script
+      (mirrors `scripts/import-catalog.mts`'s pattern) for the owner to
+      define/edit a plan's fixed contents — no admin UI.
+      AC: script run twice with the same input is idempotent (no duplicate
+      `box_plan_items` rows); a plan referencing a nonexistent variant SKU is
+      rejected with a clear error, not silently skipped.
+
+- [ ] **3b.4 Box plan → Stripe sync**
+      Deps: 3b.3, 3.2. Extends 3.2's variant→Price sync mechanism to
+      `box_plans` (recurring Price, not one-time). Same idempotency and
+      immutable-Price-archival rules — do not fork a second sync
+      implementation.
+      AC: running sync twice creates no duplicate Prices/Products; a price
+      change on an active plan archives the old Price and creates a new one.
+
+- [ ] **3b.5 Subscription Checkout session**
+      Deps: 3b.4. `mode: "subscription"`, `metadata: { box_plan_id }`, price
+      server-derived from `box_plans`.
+      AC: a tampered client plan id/price produces a session with the
+      correct server-derived amount.
+
+- [ ] **3b.6 Subscription + recurring-order webhook handling**
+      Deps: 3b.5, 3.5. `subscriptions` table + repo. Handles
+      `checkout.session.completed` (subscription mode, creates `subscriptions`
+      row only), `customer.subscription.updated`/`.deleted`, and
+      `invoice.paid` (both `billing_reason` values) — the last creates the
+      cycle's `orders`/`order_items`/inventory rows from `box_plan_items`,
+      reusing 3.5's transactional order-creation path. `orders.subscription_id`
+      column added.
+      AC: `invoice.paid` replay creates exactly one order; a
+      `customer.subscription.deleted` arriving before its
+      `checkout.session.completed` does not crash (ordering test, same shape
+      as 3.4's). Webhook module stays ≥90% covered per AGENT.md.
+
+- [ ] **3b.7 Recurring oversell guard**
+      Deps: 3b.6, 3.6. Applies 1.7/3.6's `stock > 0 OR allow_backorder` rule
+      to box fulfillment; a plan item with insufficient stock and no
+      backorder flags the generated order `needs_attention` instead of
+      silently short-shipping.
+      AC: a box plan item that goes out of stock between two billing cycles
+      produces a flagged order on the affected cycle, not a crash or a
+      silently incomplete shipment.
+
+- [ ] **3b.8 Customer account lookup + Stripe Customer Portal**
+      Deps: 3b.6. `/account`-style page: email in, portal-session link out
+      (or emailed) if a `stripe_customer_id` is found. No password, no
+      session cookie — see spec's "Account lookup" section for the
+      enumeration-safe messaging requirement.
+      AC: an unknown email and a known-but-canceled-subscription email
+      produce the same response (no enumeration signal); a known active
+      subscriber reaches a real Stripe Billing Portal session.
 
 ---
 
