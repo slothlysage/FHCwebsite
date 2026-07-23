@@ -2539,28 +2539,31 @@ sync-stripe -- --apply` ran the create step for those same 45 variants, Stripe
     no separate person name given, "FHC" covers both).
   - `SHIPPO_API_TOKEN` already live in `.env.local` (`shippo_test_…`,
     confirmed test-mode).
-  - **`DEFAULT_PARCEL`**: owner said "the flatrate shipping box size" —
-    i.e. USPS Priority Mail Flat Rate® **Small** Box. Official USPS
-    interior dimensions (store.usps.com, confirmed 2026-07-23): 8-5/8" ×
-    5-3/8" × 1-5/8". Empty-box tare weight was not looked up/confirmed —
-    treat as a few ounces and negligible next to product weight for now;
-    worth a real scale reading before the first purchased label if precision
-    matters.
+  - **`DEFAULT_PARCEL`** — corrected 2026-07-23 (owner's first answer named
+    the Small Flat Rate Box; that was wrong, replaced same day — see
+    `specs/09-shipping.md`'s "Config: parcel defaults" section for the
+    canonical version, this entry is history/trace only). It's two parcels:
+    (a) **ceiling parcel** = USPS Priority Mail Flat Rate® **Envelope**,
+    Shippo predefined template `USPS_FlatRateEnvelope` (12.50" × 9.50" ×
+    0.75", docs.goshippo.com, confirmed 2026-07-23) — use the template
+    name, not hand-typed dimensions; (b) **fine-grained parcel** = a plain
+    owner-supplied **6" × 4" × 3" box**, no USPS template, real
+    weight/zone-priced rates. Tare weight for either wasn't looked
+    up/confirmed — treat as a few ounces, not blocking.
   - **Rate-selection policy for `getRatesForOrder`/`purchaseLabel` (4.7a)**:
-    request Shippo rates using `DEFAULT_PARCEL`'s dimensions + the order's
-    real computed weight, then **pick the cheapest rate Shippo returns**,
-    not always the Flat Rate service specifically. Owner's framing: "use
-    pricing that maxes out ... as the cost for a small flat rate box ...
-    and if by that size/weight it's cheaper to send to address use that
-    price instead" — since USPS Flat Rate pricing is fixed regardless of
-    weight/zone (up to 70 lb) by design, it acts as a natural price
-    _ceiling_ for anything that fits the box; other services Shippo returns
-    for the same dimensions (e.g. non-flat-rate Priority, First-Class
-    Package/Ground Advantage) can be cheaper for a light package or a short
-    zone, and should win when they are. This is a real behavioral
-    requirement for 4.7a's rate-selection logic, not just a config value —
-    record it in `specs/09-shipping.md` alongside `DEFAULT_PARCEL`, don't
-    let it get lost as a comment.
+    request Shippo rates for **both** parcels using the order's real
+    computed weight, then **pick the cheapest rate across both
+    responses**, not always the Flat Rate service specifically. Owner's
+    framing: "use pricing that maxes out ... as the cost for [the flat
+    rate parcel] ... and if by that size/weight it's cheaper to send to
+    address use that price instead" — since USPS Flat Rate pricing is
+    fixed regardless of weight/zone (up to 70 lb) by design, it acts as a
+    natural price _ceiling_ for anything that fits the envelope; the 6×4×3
+    box's real rates can be cheaper for a light package or a short zone,
+    and should win when they are. This is a real behavioral requirement
+    for 4.7a's rate-selection logic, not just a config value — recorded in
+    `specs/09-shipping.md` alongside `DEFAULT_PARCEL`, don't let it get
+    lost as a comment.
     4.7a is now fully unblocked on config; nothing left in this entry.
 - **No `disputed` order status or owner-notification channel (3.4).**
   `specs/05-payments.md`'s webhook table says `charge.dispute.created`

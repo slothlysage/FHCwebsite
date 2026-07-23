@@ -138,36 +138,56 @@ database, and must not guess:
   bin-packing algorithm. If the owner uses genuinely different box sizes for
   different order weights, that's a v1.5 "pick the smallest parcel that
   fits" enhancement, not a v1 requirement.
-  SUPPLIED 2026-07-23 — owner ships in the USPS Priority Mail Flat Rate®
-  **Small** Box. Official interior dimensions (store.usps.com, confirmed
-  2026-07-23): **8-5/8" × 5-3/8" × 1-5/8"**. Empty-box tare weight was not
-  looked up/confirmed — treat as a few ounces (negligible next to product
-  weight) until someone puts it on a scale; not blocking.
+  SUPPLIED 2026-07-23, corrected same day (owner's first answer named the
+  wrong USPS box; this is the corrected version — don't resurrect the small
+  flat-rate-box figures from an earlier draft of this section). It's
+  actually **two** parcels, not one, because of the ceiling/cheaper-wins
+  rate policy below:
+  - **Ceiling parcel — USPS Priority Mail Flat Rate® Envelope.** Shippo has
+    a predefined template for this exact product,
+    `USPS_FlatRateEnvelope` (docs.goshippo.com — confirmed 2026-07-23:
+    12.50" × 9.50" × 0.75"), so 4.7a's rate-request code should pass that
+    template name rather than typing the raw dimensions in by hand — one
+    less place for a transcription error to reach a real label. Tare
+    weight is envelope-paper-negligible; don't bother modeling it.
+  - **Fine-grained parcel — a plain 6" × 4" × 3" box** (owner-supplied,
+    not a named USPS product — no Shippo template, pass raw dimensions).
+    This is the box whose _real_ weight/zone-priced rate gets compared
+    against the envelope's fixed price. Its own tare weight was not
+    looked up/confirmed — treat as a few ounces (negligible next to
+    product weight) until someone puts it on a scale; not blocking.
 
 Both live in `src/lib/shipping/config.ts` as plain constants (same pattern
 as `checkout.ts`'s `FLAT_RATE_SHIPPING_CENTS`) until Settings (04-admin.md)
 grows a real form for them — do not build that form speculatively now.
 
 **Package weight for a real order** = `sum(order_items.quantity ×
-product_variants.weight_grams)` + `DEFAULT_PARCEL`'s packaging-overhead
+product_variants.weight_grams)` + the chosen parcel's packaging-overhead
 grams. Shippo's parcel object accepts `mass_unit: "g"` directly — no unit
 conversion needed, `weight_grams` (already in the schema, `specs/02-data-model.md`)
-is usable as-is.
+is usable as-is. Note the order's real weight is what decides whether it
+can even go in the envelope at all — Flat Rate Envelope has no printed
+weight limit under 70 lb, but obviously has to physically fit; a product
+combination that doesn't fit isn't rateable against it and should just
+fall through to the 6×4×3 box's real rate with no envelope comparison.
 
 **Rate selection ("flat rate as ceiling, cheaper wins") — owner decision,
-2026-07-23.** `getRatesForOrder`/`purchaseLabel` (4.7a) must request Shippo
-rates for `DEFAULT_PARCEL`'s dimensions + the order's real computed weight,
-then **select the cheapest rate Shippo returns**, not hardcode "always use
-the Flat Rate service." Rationale, in the owner's own framing: USPS Flat
-Rate pricing is fixed regardless of weight or destination zone (as long as
-it fits the box, up to 70 lb) — so it's a natural price _ceiling_ for
-anything using this box, not necessarily the cheapest option. Other
-services Shippo returns for the same box dimensions (non-flat-rate
-Priority, First-Class Package, Ground Advantage, etc.) price by actual
-weight/zone and can beat the flat rate for a light item or a nearby
-destination; when one does, use it instead. Concretely: don't filter the
-Shippo rates response down to a single named service before comparing —
-sort all returned options by price and take the minimum.
+2026-07-23, parcel choice corrected same day.** `getRatesForOrder`/
+`purchaseLabel` (4.7a) must request Shippo rates for **both** parcels above
+— the `USPS_FlatRateEnvelope` template and the 6×4×3 box, each with the
+order's real computed weight — then **select the cheapest rate across
+both responses**, not hardcode "always use the Flat Rate service."
+Rationale, in the owner's own framing: USPS Flat Rate pricing is fixed
+regardless of weight or destination zone (as long as it fits the envelope,
+up to 70 lb) — so it's a natural price _ceiling_, not necessarily the
+cheapest option. The 6×4×3 box's rates (non-flat-rate Priority,
+First-Class Package, Ground Advantage, etc.) price by actual weight/zone
+and can beat the envelope's flat price for a light item or a nearby
+destination; when one does, use it instead. Concretely: don't filter
+either parcel's rates response down to a single named service before
+comparing — pool both responses' options and take the overall minimum
+price (still constrained to whichever parcel the order's real weight/size
+actually fits in, per the note above).
 
 ## Data model
 
