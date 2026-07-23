@@ -1,4 +1,5 @@
 import type { DbExecutor } from "@/lib/db/client";
+import { replaceProductAttributes } from "@/lib/repos/attributes";
 import {
   createCategory,
   getCategoryBySlug,
@@ -185,6 +186,8 @@ async function importProduct(
         (await createCategory({ slug, name: categoryName }, executor));
       await linkProductCategory(product.id, category.id, executor);
     }
+
+    await replaceProductAttributes(product.id, parsed.attributes, executor);
 
     await replaceProductImages(
       product.id,

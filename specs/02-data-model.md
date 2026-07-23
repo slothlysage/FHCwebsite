@@ -276,3 +276,36 @@ inventory_movements GROUP BY variant_id`. A plain view recomputes on every
   link); changing a field and re-running reports/applies `update`; adding a
   new variant SKU to an already-imported product creates only that variant
   without touching the existing one's diff action or stock.
+
+## Implementation notes (1.6 — importer facets: attributes + category fallback)
+
+- **Shopify's `OptionN Name`/`OptionN Value` split, confirmed against the
+  real fixture, not assumed:** `OptionN Name` (e.g. `Scent`) is written only
+  on a product's first CSV row, same as `Title`/`Tags`/`Body (HTML)`.
+  `OptionN Value` (e.g. `Balsam Fir`) is written on every row, including
+  continuation rows, because it's what actually varies per variant. A
+  parser that only read `OptionN Name` from each row (instead of capturing
+  it once and reusing it) would see `undefined` for every row after the
+  first and silently produce zero attributes — this is why
+  `parseShopifyCsv` keeps a separate `optionNamesByHandle` map alongside
+  `productsByHandle`, captured at product-creation time.
+- `ParsedProduct.attributes: ParsedAttribute[]` (`{key, value}`) is deduped
+  per product during parsing (a `Set<"key::value">` per handle), not left
+  for 1.4b's diff layer to dedupe — two variant rows sharing the same scent
+  must not produce two attribute rows for that scent on one product.
+- **Category fallback to `Type`:** Shopify's `Tags` is free-text and
+  comma-separated (already handled since 1.4a); `Type` is a single
+  product-level string (e.g. `Hair Care`). When `Tags` is blank, `Type`
+  (if present) becomes the sole category. `Tags` always wins when present
+  — this task didn't change that, only added the fallback for its absence.
+- `src/lib/repos/attributes.ts`'s `replaceProductAttributes` follows
+  `images.ts`'s `replaceProductImages` pattern exactly (delete-then-
+  reinsert per product id) rather than `categories.ts`'s
+  `onConflictDoNothing` pattern — `product_attributes` has no unique
+  constraint to conflict on, and more importantly, replace-not-insert is
+  what makes a _changed_ option value (e.g. a re-exported CSV where a
+  variant's scent value was corrected) converge to the new value instead of
+  accumulating both old and new forever. `catalog-import.ts` calls it
+  unconditionally whenever `apply && product`, in the same unconditional
+  block as `replaceProductImages` — attributes, like images, aren't part of
+  the product/variant `create`/`update`/`unchanged` diff classification.

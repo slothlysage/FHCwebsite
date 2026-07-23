@@ -45,6 +45,30 @@ export async function listFilterableAttributeValues(
   return rows.map((row) => row.value);
 }
 
+// Replaces the full attribute set for a product: delete-then-reinsert,
+// mirroring `replaceProductImages` (images.ts) — `product_attributes` has no
+// natural unique key to upsert on, and this keeps re-running the catalog
+// importer idempotent regardless of whether option values changed between
+// runs, not just whether they're identical.
+export async function replaceProductAttributes(
+  productId: string,
+  attributes: Array<{ key: string; value: string }>,
+  executor: DbExecutor = db,
+): Promise<Attribute[]> {
+  await executor
+    .delete(productAttributes)
+    .where(eq(productAttributes.productId, productId));
+
+  if (attributes.length === 0) {
+    return [];
+  }
+
+  return executor
+    .insert(productAttributes)
+    .values(attributes.map((attribute) => ({ ...attribute, productId })))
+    .returning();
+}
+
 // Every attribute row for one product, regardless of key — the product-
 // detail page (2.5) groups these by key (scent, size, burn_time, ...) to
 // display whichever open-ended facets a given product actually has.

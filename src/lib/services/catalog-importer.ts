@@ -25,6 +25,16 @@ export interface ParsedImage {
   position: number;
 }
 
+/** A product-level filter facet, e.g. `{ key: "scent", value: "lavender" }`.
+ * `key` comes from `OptionN Name` (present once, on a product's first row);
+ * `value` comes from `OptionN Value`, read per variant row and deduped —
+ * a product with several scent variants gets one attribute row per distinct
+ * scent, not one per variant. */
+export interface ParsedAttribute {
+  key: string;
+  value: string;
+}
+
 export type ParsedProductStatus = "draft" | "published" | "archived";
 
 export interface ParsedProduct {
@@ -34,6 +44,7 @@ export interface ParsedProduct {
   description: string | null;
   status: ParsedProductStatus;
   categories: string[];
+  attributes: ParsedAttribute[];
   variants: ParsedVariant[];
   images: ParsedImage[];
 }
@@ -109,6 +120,12 @@ export function parseShopifyCsv(csvText: string): ParseCsvResult {
 
   const productsByHandle = new Map<string, ParsedProduct>();
   const seenSkus = new Set<string>();
+  // Option names (e.g. "Scent") appear once, on a product's first row;
+  // `OptionN Value` (e.g. "Lavender") repeats per variant row. Both maps
+  // are keyed by handle so later rows for the same product can look the
+  // name back up and dedupe values against it.
+  const optionNamesByHandle = new Map<string, Array<string | null>>();
+  const seenAttributesByHandle = new Map<string, Set<string>>();
 
   records.forEach((raw, index) => {
     const rowNumber = index + 2; // +1 header, +1 to make it 1-based
@@ -133,23 +150,50 @@ export function parseShopifyCsv(csvText: string): ParseCsvResult {
         return;
       }
       const tags = raw["Tags"]?.trim() ?? "";
+      const type = raw["Type"]?.trim() ?? "";
       product = {
         handle,
         slug: handle.toLowerCase(),
         name: title,
         description: raw["Body (HTML)"]?.trim() || null,
         status: parseStatus(raw["Status"], raw["Published"]),
+        // Tags win when present; a fixture/export with no Tags column (or a
+        // blank value) still gets a usable category facet from Type.
         categories: tags
           ? tags
               .split(",")
               .map((t) => t.trim())
               .filter((t) => t.length > 0)
-          : [],
+          : type
+            ? [type]
+            : [],
+        attributes: [],
         variants: [],
         images: [],
       };
       productsByHandle.set(handle, product);
+      optionNamesByHandle.set(
+        handle,
+        [raw["Option1 Name"], raw["Option2 Name"], raw["Option3 Name"]].map(
+          (name) => name?.trim().toLowerCase() || null,
+        ),
+      );
+      seenAttributesByHandle.set(handle, new Set());
     }
+
+    const optionNames = optionNamesByHandle.get(handle)!;
+    const seenAttributes = seenAttributesByHandle.get(handle)!;
+    [raw["Option1 Value"], raw["Option2 Value"], raw["Option3 Value"]].forEach(
+      (rawValue, optionIndex) => {
+        const key = optionNames[optionIndex];
+        const value = rawValue?.trim();
+        if (!key || !value) return;
+        const dedupeKey = `${key}::${value}`;
+        if (seenAttributes.has(dedupeKey)) return;
+        seenAttributes.add(dedupeKey);
+        product!.attributes.push({ key, value });
+      },
+    );
 
     // Non-null: "Variant SKU"/"Variant Price"/"Variant Grams" are all
     // required columns — see the note on "Handle" above.

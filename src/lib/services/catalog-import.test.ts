@@ -4,11 +4,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db/client";
 import {
   inventoryMovements,
+  productAttributes,
   productCategories,
   productImages,
   productVariants,
   products,
 } from "@/lib/db/schema";
+import { listAttributesByProductId } from "@/lib/repos/attributes";
 import { getCategoryBySlug } from "@/lib/repos/categories";
 import { getProductBySlug } from "@/lib/repos/products";
 import { getVariantBySku } from "@/lib/repos/variants";
@@ -36,6 +38,9 @@ describe("runCatalogImport", () => {
         .delete(productVariants)
         .where(eq(productVariants.productId, productId));
       await db
+        .delete(productAttributes)
+        .where(eq(productAttributes.productId, productId));
+      await db
         .delete(productImages)
         .where(eq(productImages.productId, productId));
       await db
@@ -55,6 +60,7 @@ describe("runCatalogImport", () => {
       description: "A candle for testing the importer",
       status: "draft",
       categories: ["candles", "seasonal"],
+      attributes: [{ key: "scent", value: "Lavender" }],
       variants: [
         {
           sku: "TEST-IMPORT-8OZ",
@@ -113,6 +119,11 @@ describe("runCatalogImport", () => {
       .where(eq(productCategories.productId, product!.id));
     expect(links).toHaveLength(2);
 
+    const attributes = await listAttributesByProductId(product!.id);
+    expect(attributes).toEqual([
+      expect.objectContaining({ key: "scent", value: "Lavender" }),
+    ]);
+
     const images = await db
       .select()
       .from(productImages)
@@ -161,6 +172,29 @@ describe("runCatalogImport", () => {
       .from(productCategories)
       .where(eq(productCategories.productId, product!.id));
     expect(links).toHaveLength(2);
+
+    const attributes = await listAttributesByProductId(product!.id);
+    expect(attributes).toHaveLength(1);
+  });
+
+  it("replaces attributes on re-import instead of duplicating or accumulating stale values", async () => {
+    await runCatalogImport([parsedProduct()], { apply: true });
+    const product = await getProductBySlug("test-import-candle");
+    insertedProductIds.push(product!.id);
+
+    await runCatalogImport(
+      [
+        parsedProduct({
+          attributes: [{ key: "scent", value: "Vanilla" }],
+        }),
+      ],
+      { apply: true },
+    );
+
+    const attributes = await listAttributesByProductId(product!.id);
+    expect(attributes).toEqual([
+      expect.objectContaining({ key: "scent", value: "Vanilla" }),
+    ]);
   });
 
   it("reports and applies an 'update' when a product/variant field changed", async () => {

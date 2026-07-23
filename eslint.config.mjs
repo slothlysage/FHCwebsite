@@ -15,6 +15,10 @@ const eslintConfig = defineConfig([
     "build/**",
     "coverage/**",
     "next-env.d.ts",
+    // opennextjs-cloudflare build output (task 6.0's `preview`/`deploy`
+    // scripts) — gitignored, disposable, and not meant to be linted as our
+    // own source.
+    ".open-next/**",
   ]),
 ]);
 

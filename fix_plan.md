@@ -578,23 +578,77 @@ tests/fixtures/catalog.csv --apply` — all 5 products diffed `[update]`
       `Variant Inventory Qty` populated. Nothing is sellable until then,
       which is fine pre-checkout (cart is 2.7, payments are phase 3).
 
-- [ ] **1.6 Importer populates filter facets (attributes + categories)**
-      Deps: 1.5. Discovered during the 2026-07-22 repo sweep against the
-      real catalog: 2.3's filter UI facets are empty for imported data.
-      (a) `Option1 Name` is `Scent` in the real CSV but the importer only
-      uses `Option1/2/3 Value` for the variant _name_ — it never writes
-      `product_attributes` rows, so the scent facet
-      (`listFilterableAttributeValues("scent")`) has nothing to list.
-      Map each `OptionN Name`/`OptionN Value` pair (lowercased key) to a
-      `setProductAttribute` call per distinct value per product.
-      (b) The fixture CSV has no `Tags`, so zero categories exist — but it
-      does have `Type` (`Hair Care`, `Soap`, `Candles`, `Body Butter`).
-      Fall back to `Type` as a category when `Tags` is blank (Tags still
-      win when present, preserving current behavior).
-      AC: after re-importing `tests/fixtures/catalog.csv`, the /products
-      filter form lists a Scent facet with the 9 real scents and a
-      category facet with the 4 product types; re-import stays idempotent
-      (no duplicate attribute/category rows).
+- [x] **1.6 Importer populates filter facets (attributes + categories)**
+      Deps: 1.5. `ParsedProduct` (1.4a, `catalog-importer.ts`) gained
+      `attributes: ParsedAttribute[]` (`{key, value}`). `OptionN Name`
+      appears once per product (its first CSV row, alongside Title/Tags —
+      confirmed against the real fixture, not assumed); `OptionN Value`
+      repeats per variant row. Parsing keeps two handle-keyed maps
+      alongside `productsByHandle`: `optionNamesByHandle` (captured once,
+      on product creation, lowercased) and `seenAttributesByHandle` (a
+      `Set<"key::value">` per handle) so the same key/value pair seen
+      across multiple variant rows (e.g. two SKUs that both come in
+      "Balsam Fir") is recorded once, not once per row. (b) category
+      fallback: `product.categories` now falls back to `[Type]` when
+      `Tags` is blank; `Tags` still wins when present (unchanged from
+      before). Both changes are parser-only (pure, no DB) — 1.4b's
+      diff/apply layer was untouched for status logic, only extended.
+      `src/lib/repos/attributes.ts` gained `replaceProductAttributes`
+      (delete-then-reinsert per product id), mirroring `images.ts`'s
+      `replaceProductImages` exactly — `product_attributes` has no natural
+      upsert key, and replace-not-diff is what makes a changed option
+      value (not just a repeated one) idempotent too, not only an
+      unchanged one. `catalog-import.ts`'s `importProduct` calls it
+      unconditionally on `apply && product`, in the same block as
+      `replaceProductImages`, so attributes remain in sync with the parsed
+      input on every apply regardless of the product/variant `action`
+      classification (create/update/unchanged) — matching how images
+      already behave, not a new pattern.
+      Tests: 4 new parser cases (dedup across repeated values, a second
+      independent `OptionN` pair, `Type` fallback when `Tags` is blank,
+      `Tags` wins when both present) plus an `attributes: []` assertion
+      added to the existing minimal-CSV case; 2 new `catalog-import.ts`
+      integration cases (apply writes attribute rows, re-import with a
+      changed value replaces rather than accumulates) plus assertions
+      added to the existing create/re-apply-unchanged cases. All confirmed
+      red first (missing `attributes` field / no rows written) before
+      implementing.
+      AC met, verified live against the real dev database: re-ran
+      `npm run import-catalog -- tests/fixtures/catalog.csv --apply`
+      (all 5 products `[unchanged]`, since this only added facet data);
+      `listFilterableAttributeValues("scent")` returns exactly the 9 real
+      scents; `listFilterableCategories()` returns `Body Butter, Hair
+    Care, Soap, candles` — 4 categories, matching the AC's "4 product
+      types" (the `Type` value `Candles` slugifies to `candles`, which
+      collided with a category of that same slug/lower-name already
+      created by an earlier iteration's `catalog-import.test.ts` runs —
+      pre-existing stale data unrelated to this task's code, not a bug:
+      `getCategoryBySlug` correctly found and reused it instead of
+      creating a duplicate). Ran the apply a second time immediately
+      after: `product_attributes` row count held at 45 and
+      `product_categories` link count held at 5 — no duplicates.
+      `npm run verify` green: 30 files, 260 tests, 98.8/96.15/100/98.75%
+      coverage, build passes.
+      NOTE: while running `verify`, lint failed on a stray `.open-next/`
+      directory (26MB, gitignored, produced by `npm run preview`/`deploy`
+      — task 6.0's Cloudflare Workers adapter — but never added to
+      `eslint.config.mjs`'s `globalIgnores`). This wasn't caused by 1.6's
+      changes but blocked its AC (`npm run verify` must pass), so it's
+      fixed in this commit: `.open-next/**` added to `globalIgnores`
+      (matching the existing `.next/**`/`out/**`/`build/**` pattern) and
+      the stray directory deleted (regenerable via `npm run preview`, not
+      committed work). Any future iteration that runs `preview`/`deploy`
+      locally will hit this again if it doesn't know to `rm -rf
+.open-next` first — now it won't, since lint ignores it.
+      NOTE for later cleanup (not blocking, low priority): the stale
+      `candles`/`seasonal` categories mentioned above come from
+      `catalog-import.test.ts`'s `afterEach`, which deletes
+      `product_categories` link rows (via the parent product's cascade)
+      but never the `categories` rows themselves — every local test run
+      against the dev DB leaves orphaned category rows behind. Harmless
+      today (`listFilterableCategories` only returns categories with a
+      live published-product link), but worth a follow-up if the category
+      table ever needs a uniqueness/cleanup pass.
 
 - [x] **1.7 Made-to-order / oversell support** (owner request, 2026-07-22)
       Deps: 1.3. The shop has no supply yet and wants to sell anyway,

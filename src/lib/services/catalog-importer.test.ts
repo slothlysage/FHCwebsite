@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parseShopifyCsv } from "@/lib/services/catalog-importer";
 
 const HEADER =
-  "Handle,Title,Body (HTML),Tags,Option1 Value,Option2 Value,Variant SKU,Variant Price,Variant Compare At Price,Variant Grams,Variant Inventory Qty,Image Src,Image Position,Image Alt Text,Published,Status";
+  "Handle,Title,Body (HTML),Type,Tags,Option1 Name,Option1 Value,Option2 Name,Option2 Value,Variant SKU,Variant Price,Variant Compare At Price,Variant Grams,Variant Inventory Qty,Image Src,Image Position,Image Alt Text,Published,Status";
 
 function row(fields: Record<string, string>): string {
   const cols = HEADER.split(",");
@@ -290,6 +290,7 @@ describe("parseShopifyCsv", () => {
     const product = result.products[0]!;
     expect(product.description).toBeNull();
     expect(product.categories).toEqual([]);
+    expect(product.attributes).toEqual([]);
     expect(product.images).toEqual([]);
     expect(product.variants[0]).toMatchObject({
       sku: "LAV-8OZ",
@@ -335,6 +336,109 @@ describe("parseShopifyCsv", () => {
       sku: "LAV-8OZ",
       stockQuantity: 0,
     });
+  });
+
+  it("maps OptionN Name/Value pairs into distinct product-level attributes", () => {
+    const csv = [
+      HEADER,
+      row({
+        Handle: "shampoo-bar",
+        Title: "Shampoo Bar",
+        "Option1 Name": "Scent",
+        "Option1 Value": "Balsam Fir",
+        "Variant SKU": "SHMP-BALSAM",
+        "Variant Price": "12.00",
+        "Variant Grams": "113",
+      }),
+      row({
+        Handle: "shampoo-bar",
+        "Option1 Value": "Old Books",
+        "Variant SKU": "SHMP-BOOKS",
+        "Variant Price": "12.00",
+        "Variant Grams": "113",
+      }),
+      row({
+        // Same value seen again for a different variant — must not duplicate.
+        Handle: "shampoo-bar",
+        "Option1 Value": "Balsam Fir",
+        "Variant SKU": "SHMP-BALSAM-2",
+        "Variant Price": "12.00",
+        "Variant Grams": "113",
+      }),
+    ].join("\n");
+
+    const result = parseShopifyCsv(csv);
+
+    expect(result.errors).toEqual([]);
+    expect(result.products[0]!.attributes).toEqual([
+      { key: "scent", value: "Balsam Fir" },
+      { key: "scent", value: "Old Books" },
+    ]);
+  });
+
+  it("collects a second OptionN Name/Value pair independently of the first", () => {
+    const csv = [
+      HEADER,
+      row({
+        Handle: "candle",
+        Title: "Candle",
+        "Option1 Name": "Scent",
+        "Option1 Value": "Lavender",
+        "Option2 Name": "Size",
+        "Option2 Value": "8oz",
+        "Variant SKU": "CANDLE-LAV-8",
+        "Variant Price": "24.00",
+        "Variant Grams": "227",
+      }),
+    ].join("\n");
+
+    const result = parseShopifyCsv(csv);
+
+    expect(result.errors).toEqual([]);
+    expect(result.products[0]!.attributes).toEqual([
+      { key: "scent", value: "Lavender" },
+      { key: "size", value: "8oz" },
+    ]);
+  });
+
+  it("falls back to Type as a category when Tags is blank", () => {
+    const csv = [
+      HEADER,
+      row({
+        Handle: "shampoo-bar",
+        Title: "Shampoo Bar",
+        Type: "Hair Care",
+        Tags: "",
+        "Variant SKU": "SHMP-1",
+        "Variant Price": "12.00",
+        "Variant Grams": "113",
+      }),
+    ].join("\n");
+
+    const result = parseShopifyCsv(csv);
+
+    expect(result.errors).toEqual([]);
+    expect(result.products[0]!.categories).toEqual(["Hair Care"]);
+  });
+
+  it("prefers Tags over Type when both are present", () => {
+    const csv = [
+      HEADER,
+      row({
+        Handle: "shampoo-bar",
+        Title: "Shampoo Bar",
+        Type: "Hair Care",
+        Tags: "candles",
+        "Variant SKU": "SHMP-1",
+        "Variant Price": "12.00",
+        "Variant Grams": "113",
+      }),
+    ].join("\n");
+
+    const result = parseShopifyCsv(csv);
+
+    expect(result.errors).toEqual([]);
+    expect(result.products[0]!.categories).toEqual(["candles"]);
   });
 
   it("returns an empty result for an empty catalog", () => {
