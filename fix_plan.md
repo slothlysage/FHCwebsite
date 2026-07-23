@@ -521,13 +521,40 @@ import.test.ts` (5 integration tests against the real dev
         `catalog-import.ts` at 97.5%/94.87%/100%/97.36%
         (stmts/branches/funcs/lines), comfortably above the 90%
         `src/lib/services/**` floor.
-        🚦 HUMAN GATE — remains open. The AC's other clause ("importing
-        the real export produces the correct product/variant counts")
-        needs an actual Shopify CSV export, which this repo does not have.
-        The importer and CLI are built, tested, and ready; running them
-        for real against the production catalog still needs the owner to
-        supply the file and confirm the parsed/diffed output before the
-        first real `--apply`. See "Blocked — needs human".
+        🚦 HUMAN GATE — CLOSED 2026-07-22. The owner supplied the
+        starting catalog as `tests/fixtures/catalog.csv` and confirmed it
+        as the data to import. Dry-run inspected first, then
+        `npm run import-catalog -- tests/fixtures/catalog.csv --apply`
+        run against the local dev database: 5 products / 45 variants /
+        45 import-reason inventory movements — exactly matching the CSV
+        (9 scents × 5 product types: shampoo-bar, conditioner-bar, soap,
+        8oz-candle, 8oz-body-butter). Zero row errors. The dev DB was
+        `db:reset` first because it held 41 stale products (94 variants)
+        from an older, superseded fixture (bundle/"copy-of-" slugs from
+        2.2-era verification) — a clean import was the only way to make
+        counts assertable. Re-ran the full `npm run verify` gate against
+        the imported data: 30 files, 244 tests, 99.14% coverage, build
+        green.
+        NOTE — discovered during the real import, logged as task 1.5:
+        all 5 products imported as `status = 'draft'` even though the
+        CSV's `Status` column says `active` and `Published` says `true` —
+        the importer never reads those columns. Until 1.5 lands (or an
+        admin publishes them via 4.3), the storefront listing renders an
+        empty state against this otherwise-correct catalog.
+
+- [ ] **1.5 Importer honors CSV `Status`/`Published` columns**
+      Deps: 1.4b. Discovered during the first real `--apply` (2026-07-22):
+      `parseShopifyCsv` ignores the `Status` (`active`/`draft`/`archived`)
+      and `Published` columns, so every imported product lands as `draft`
+      and the storefront shows an empty catalog until each is hand-published.
+      Map `Status` → `products.status` (`active` → `published`; missing/
+      other → `draft` — permissive-parse convention), on create AND update
+      diff. Decide + document how `Published: false` interacts with
+      `Status: active`.
+      AC: importing `tests/fixtures/catalog.csv` (all rows `active`/`true`)
+      yields 5 `published` products visible on `/products`; a CSV row with
+      `Status: draft` still imports as draft; existing importer tests stay
+      green.
 
 ---
 
@@ -1047,7 +1074,7 @@ verify` green (lint, typecheck, test:coverage, build — `/products/
         following the same "small pure util" pattern as `formatPriceCents`;
         returns `null` for a `null` description, matching `ProductDetail`'s
         typing exactly rather than coercing to `""`), `alternates.canonical:
-    "/products/{slug}"` — deliberately without `?variant=`, since the
+"/products/{slug}"` — deliberately without `?variant=`, since the
         variant selector (2.5) is UI state on one resource, not a distinct
         page, so switching variants must never change what search engines
         treat as canonical. An unknown slug's `generateMetadata` returns
@@ -1098,7 +1125,7 @@ page.test.tsx` (title/description/canonical for a real published
 
   - [ ] **2.6b `Product` + `Offer` JSON-LD**
         Deps: 2.6a. `products/[slug]/page.tsx` renders a `<script
-    type="application/ld+json">` with schema.org `Product` (name,
+type="application/ld+json">` with schema.org `Product` (name,
         description, image, sku) + nested `Offer` (price, `priceCurrency`,
         `availability` derived from the selected variant's live stock, `url`
         = the canonical product URL) for the initially-selected variant.
@@ -1335,11 +1362,13 @@ _(agent appends here; do not guess around a blocker)_
 - Confirmation on cosmetics labeling: MoCRA requires an ingredient list and a
   responsible-person contact for body butter; candles need ASTM F2417 fire-safety
   warnings. Product data model assumes these fields exist. Needed for 1.1.
-- Real Shopify product CSV export: needed to actually run
-  `npm run import-catalog -- <file> --apply` for the first time (1.4b). The
-  parser, diff, apply, and CLI are all built and tested against synthetic
-  data — this is purely waiting on the owner to supply the file and confirm
-  the parsed/diffed product and variant counts before the first real apply.
+- ~~Real Shopify product CSV export: needed to actually run
+  `npm run import-catalog -- <file> --apply` for the first time (1.4b).~~
+  RESOLVED 2026-07-22: owner confirmed `tests/fixtures/catalog.csv` as the
+  starting catalog and authorized the first `--apply`. Imported clean
+  (5 products / 45 variants, zero row errors) after a `db:reset` cleared
+  stale rows from an older fixture. See 1.4b's closed gate note and new
+  task 1.5.
 
 ## Done
 
