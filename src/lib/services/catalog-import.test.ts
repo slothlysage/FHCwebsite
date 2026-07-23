@@ -53,6 +53,7 @@ describe("runCatalogImport", () => {
       slug: "test-import-candle",
       name: "Test Import Candle",
       description: "A candle for testing the importer",
+      status: "draft",
       categories: ["candles", "seasonal"],
       variants: [
         {
@@ -216,5 +217,33 @@ describe("runCatalogImport", () => {
 
     const newVariant = await getVariantBySku("TEST-IMPORT-16OZ");
     expect(newVariant?.productId).toBe(product!.id);
+  });
+
+  it("apply writes the parsed status on create", async () => {
+    await runCatalogImport([parsedProduct({ status: "published" })], {
+      apply: true,
+    });
+
+    const product = await getProductBySlug("test-import-candle");
+    insertedProductIds.push(product!.id);
+    expect(product?.status).toBe("published");
+  });
+
+  it("reports and applies a status-only change as an 'update'", async () => {
+    await runCatalogImport([parsedProduct({ status: "draft" })], {
+      apply: true,
+    });
+    const product = await getProductBySlug("test-import-candle");
+    insertedProductIds.push(product!.id);
+    expect(product?.status).toBe("draft");
+
+    const result = await runCatalogImport(
+      [parsedProduct({ status: "published" })],
+      { apply: true },
+    );
+
+    expect(result.products[0]?.action).toBe("update");
+    const updated = await getProductBySlug("test-import-candle");
+    expect(updated?.status).toBe("published");
   });
 });

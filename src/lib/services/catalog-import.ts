@@ -43,7 +43,11 @@ export interface CatalogImportResult {
   products: ProductDiffEntry[];
 }
 
-type ExistingProduct = { name: string; description: string | null };
+type ExistingProduct = {
+  name: string;
+  description: string | null;
+  status: string;
+};
 type ExistingVariant = {
   name: string;
   priceCents: number;
@@ -57,7 +61,9 @@ function productChanged(
   parsed: ParsedProduct,
 ): boolean {
   return (
-    existing.name !== parsed.name || existing.description !== parsed.description
+    existing.name !== parsed.name ||
+    existing.description !== parsed.description ||
+    existing.status !== parsed.status
   );
 }
 
@@ -103,6 +109,7 @@ async function importProduct(
           slug: parsed.slug,
           name: parsed.name,
           description: parsed.description,
+          status: parsed.status,
         },
         executor,
       );
@@ -110,7 +117,11 @@ async function importProduct(
       product =
         (await updateProduct(
           product.id,
-          { name: parsed.name, description: parsed.description },
+          {
+            name: parsed.name,
+            description: parsed.description,
+            status: parsed.status,
+          },
           executor,
         )) ?? product;
     }

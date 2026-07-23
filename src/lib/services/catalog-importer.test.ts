@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parseShopifyCsv } from "@/lib/services/catalog-importer";
 
 const HEADER =
-  "Handle,Title,Body (HTML),Tags,Option1 Value,Option2 Value,Variant SKU,Variant Price,Variant Compare At Price,Variant Grams,Variant Inventory Qty,Image Src,Image Position,Image Alt Text";
+  "Handle,Title,Body (HTML),Tags,Option1 Value,Option2 Value,Variant SKU,Variant Price,Variant Compare At Price,Variant Grams,Variant Inventory Qty,Image Src,Image Position,Image Alt Text,Published,Status";
 
 function row(fields: Record<string, string>): string {
   const cols = HEADER.split(",");
@@ -340,5 +340,119 @@ describe("parseShopifyCsv", () => {
   it("returns an empty result for an empty catalog", () => {
     const result = parseShopifyCsv(HEADER);
     expect(result).toEqual({ products: [], errors: [] });
+  });
+
+  it("maps Status 'active' with Published 'true' to a published product", () => {
+    const csv = [
+      HEADER,
+      row({
+        Handle: "lavender-candle",
+        Title: "Lavender Candle",
+        "Variant SKU": "LAV-8OZ",
+        "Variant Price": "24.00",
+        "Variant Grams": "227",
+        Published: "true",
+        Status: "active",
+      }),
+    ].join("\n");
+
+    const result = parseShopifyCsv(csv);
+
+    expect(result.errors).toEqual([]);
+    expect(result.products[0]!.status).toBe("published");
+  });
+
+  it("maps Status 'draft' and 'archived' to the matching statuses", () => {
+    const csv = [
+      HEADER,
+      row({
+        Handle: "draft-candle",
+        Title: "Draft Candle",
+        "Variant SKU": "DRAFT-8OZ",
+        "Variant Price": "24.00",
+        "Variant Grams": "227",
+        Published: "true",
+        Status: "draft",
+      }),
+      row({
+        Handle: "archived-candle",
+        Title: "Archived Candle",
+        "Variant SKU": "ARCH-8OZ",
+        "Variant Price": "24.00",
+        "Variant Grams": "227",
+        Published: "true",
+        Status: "archived",
+      }),
+    ].join("\n");
+
+    const result = parseShopifyCsv(csv);
+
+    expect(result.errors).toEqual([]);
+    expect(result.products[0]!.status).toBe("draft");
+    expect(result.products[1]!.status).toBe("archived");
+  });
+
+  it("treats Status 'active' with Published 'false' as draft", () => {
+    const csv = [
+      HEADER,
+      row({
+        Handle: "lavender-candle",
+        Title: "Lavender Candle",
+        "Variant SKU": "LAV-8OZ",
+        "Variant Price": "24.00",
+        "Variant Grams": "227",
+        Published: "false",
+        Status: "active",
+      }),
+    ].join("\n");
+
+    const result = parseShopifyCsv(csv);
+
+    expect(result.errors).toEqual([]);
+    expect(result.products[0]!.status).toBe("draft");
+  });
+
+  it("defaults status to draft when Status is missing, blank, or unknown", () => {
+    const minimalHeader =
+      "Handle,Title,Variant SKU,Variant Price,Variant Grams";
+    const missingColumn = parseShopifyCsv(
+      [minimalHeader, "lavender-candle,Lavender Candle,LAV-8OZ,24.00,227"].join(
+        "\n",
+      ),
+    );
+    expect(missingColumn.errors).toEqual([]);
+    expect(missingColumn.products[0]!.status).toBe("draft");
+
+    const blank = parseShopifyCsv(
+      [
+        HEADER,
+        row({
+          Handle: "lavender-candle",
+          Title: "Lavender Candle",
+          "Variant SKU": "LAV-8OZ",
+          "Variant Price": "24.00",
+          "Variant Grams": "227",
+        }),
+      ].join("\n"),
+    );
+    expect(blank.errors).toEqual([]);
+    expect(blank.products[0]!.status).toBe("draft");
+
+    const unknown = parseShopifyCsv(
+      [
+        HEADER,
+        row({
+          Handle: "lavender-candle",
+          Title: "Lavender Candle",
+          "Variant SKU": "LAV-8OZ",
+          "Variant Price": "24.00",
+          "Variant Grams": "227",
+          Published: "true",
+          Status: "something-else",
+        }),
+      ].join("\n"),
+    );
+    expect(unknown.errors).toEqual([]);
+    expect(unknown.products[0]!.status).toBe("draft");
   });
 });

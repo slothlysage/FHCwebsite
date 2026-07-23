@@ -25,11 +25,14 @@ export interface ParsedImage {
   position: number;
 }
 
+export type ParsedProductStatus = "draft" | "published" | "archived";
+
 export interface ParsedProduct {
   handle: string;
   slug: string;
   name: string;
   description: string | null;
+  status: ParsedProductStatus;
   categories: string[];
   variants: ParsedVariant[];
   images: ParsedImage[];
@@ -61,6 +64,21 @@ function parseMoney(raw: string): number | null {
   const value = Number(raw);
   if (!Number.isFinite(value)) return null;
   return Math.round(value * 100);
+}
+
+// Shopify's `Status` is active/draft/archived; `Published` is a separate
+// true/false. `active` only maps to `published` when `Published` doesn't
+// contradict it. Anything unrecognized falls back to `draft` — same
+// permissive convention as the other optional columns, never a row error.
+function parseStatus(
+  statusRaw: string | undefined,
+  publishedRaw: string | undefined,
+): ParsedProductStatus {
+  const status = statusRaw?.trim().toLowerCase() ?? "";
+  if (status === "archived") return "archived";
+  const published = publishedRaw?.trim().toLowerCase() !== "false";
+  if (status === "active" && published) return "published";
+  return "draft";
 }
 
 export function parseShopifyCsv(csvText: string): ParseCsvResult {
@@ -120,6 +138,7 @@ export function parseShopifyCsv(csvText: string): ParseCsvResult {
         slug: handle.toLowerCase(),
         name: title,
         description: raw["Body (HTML)"]?.trim() || null,
+        status: parseStatus(raw["Status"], raw["Published"]),
         categories: tags
           ? tags
               .split(",")

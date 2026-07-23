@@ -542,19 +542,41 @@ import.test.ts` (5 integration tests against the real dev
         admin publishes them via 4.3), the storefront listing renders an
         empty state against this otherwise-correct catalog.
 
-- [ ] **1.5 Importer honors CSV `Status`/`Published` columns**
+- [x] **1.5 Importer honors CSV `Status`/`Published` columns**
       Deps: 1.4b. Discovered during the first real `--apply` (2026-07-22):
-      `parseShopifyCsv` ignores the `Status` (`active`/`draft`/`archived`)
-      and `Published` columns, so every imported product lands as `draft`
-      and the storefront shows an empty catalog until each is hand-published.
-      Map `Status` → `products.status` (`active` → `published`; missing/
-      other → `draft` — permissive-parse convention), on create AND update
-      diff. Decide + document how `Published: false` interacts with
-      `Status: active`.
-      AC: importing `tests/fixtures/catalog.csv` (all rows `active`/`true`)
-      yields 5 `published` products visible on `/products`; a CSV row with
-      `Status: draft` still imports as draft; existing importer tests stay
-      green.
+      `parseShopifyCsv` ignored the `Status`/`Published` columns, so every
+      imported product landed as `draft` and the storefront showed an empty
+      catalog against a correct import.
+      `ParsedProduct` gained `status: ParsedProductStatus`
+      (`draft | published | archived`), derived on the first row per handle
+      by a new `parseStatus` helper: `archived` → `archived`;
+      `active` → `published` **unless** `Published` is literally `false`
+      (Shopify keeps them as separate columns and `Published: false` +
+      `Status: active` means "not on the online channel" — resolved to
+      `draft`, the safe direction); anything else (missing column, blank,
+      unknown value) → `draft`, permissive-parse convention, never a row
+      error. `catalog-import.ts`: `productChanged` now compares `status`,
+      and both the create and update paths write `parsed.status` — so a
+      status-only change diffs as `update`, and re-importing after an admin
+      unpublishes WILL republish (CSV wins; the importer is a full-sync
+      tool, consistent with how it already overwrites name/description).
+      Tests: 4 new parser cases (active+true → published; draft/archived
+      passthrough; active+Published:false → draft; missing/blank/unknown →
+      draft) and 2 new integration cases (create writes parsed status;
+      status-only change reports and applies `update`) — all confirmed red
+      first (`status` undefined / action `unchanged`) before implementing.
+      AC met, verified live: re-ran `npm run import-catalog --
+    tests/fixtures/catalog.csv --apply` — all 5 products diffed `[update]`
+      and flipped to `published` (psql-confirmed), and a real `next dev` +
+      `curl /products` rendered all 5 product cards (each "Out of stock" —
+      correct, the CSV has no `Variant Inventory Qty` column, so initial
+      import movements are delta 0). `npm run verify` green: 30 files, 250
+      tests, 99.15/96.44/100/99.12% coverage, build passes.
+      NOTE for 4.4 (inventory management): the catalog is live but every
+      variant has 0 stock — real starting counts need either a manual
+      `inventory_movements` adjustment (admin UI, 4.4) or a future CSV with
+      `Variant Inventory Qty` populated. Nothing is sellable until then,
+      which is fine pre-checkout (cart is 2.7, payments are phase 3).
 
 ---
 
