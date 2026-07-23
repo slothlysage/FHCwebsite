@@ -5,6 +5,7 @@
 - Next.js App Router, TypeScript `strict: true`, React Server Components by default
 - Drizzle ORM + PostgreSQL (Neon)
 - Stripe Checkout (hosted) + webhooks. **Not** Payment Element in v1.
+- Shippo for USPS/carrier shipping labels — see `specs/09-shipping.md`. Not Parcelcraft (Shopify-only, no API for this stack).
 - Tailwind CSS. No component library; hand-rolled primitives in `src/components/ui`.
 - Vitest + React Testing Library (unit/integration), Playwright (E2E)
 - Zod for every external boundary: env vars, form input, API payloads, webhook bodies

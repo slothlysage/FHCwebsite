@@ -1893,7 +1893,7 @@ client.ts`: (1) the Stripe SDK's default Node HTTP client defers
       AC: a tampered client payload (altered price or quantity) produces a session
       with the correct server-derived amounts. This test is mandatory.
       `src/lib/services/checkout.ts` — `createCheckoutSession(cartId,
-  {idempotencyKey})`. Takes only a cart id + idempotency key, no
+{idempotencyKey})`. Takes only a cart id + idempotency key, no
       price/quantity/total parameter exists for a client to reach; all
       pricing comes from `getCartSummary` (2.7). Line items reference each
       variant's already-synced `stripePriceId` (3.2's `runStripeSync`), not
@@ -1902,7 +1902,7 @@ client.ts`: (1) the Stripe SDK's default Node HTTP client defers
       fails the whole checkout (`{ok: false, reason: "unavailable"}`)
       rather than silently dropping that line. Flat US-only shipping rate
       (placeholder amount, owner to confirm) + `automatic_tax: {enabled:
-  true}` (needs a Stripe Dashboard Tax origin address before a real,
+true}` (needs a Stripe Dashboard Tax origin address before a real,
       non-mocked call succeeds — not something code can satisfy).
       `src/lib/actions/checkout.ts` — `createCheckoutSessionAction`, a
       Server Action bound to a new Checkout form on the cart page
@@ -1910,7 +1910,7 @@ client.ts`: (1) the Stripe SDK's default Node HTTP client defers
       `formData` is a `nonce` field the cart page generates fresh
       (`crypto.randomUUID()`) on every render; `cartId` comes from the
       `cart_id` cookie. Idempotency key is `checkout-session-{cartId}-
-  {nonce}` — not derived from `carts.updatedAt`, which is never bumped
+{nonce}` — not derived from `carts.updatedAt`, which is never bumped
       after cart creation and so can't distinguish "same attempt retried"
       from "a week later." Mandatory tamper test
       (`src/lib/actions/checkout.test.ts`) POSTs a payload with extra
@@ -1948,6 +1948,28 @@ client.ts`: (1) the Stripe SDK's default Node HTTP client defers
       `--apply` to have been run first.
       NOTE for 3.4/3.5: correlate the webhook back to a cart via
       `session.metadata.cart_id` only — there is no `order_draft_id`.
+
+- [ ] **3.3b Weight-tiered shipping rates at checkout** (added 2026-07-23,
+      owner request — see `specs/09-shipping.md`)
+      Deps: 3.3. Replaces `checkout.ts`'s single
+      `FLAT_RATE_SHIPPING_CENTS = 600` with 2–3 static, weight-banded
+      `shipping_rate_data` options (e.g. under 1 lb / 1–3 lb / 3+ lb),
+      computed server-side from `sum(order_items.quantity ×
+product_variants.weight_grams)` across the cart. Prices are owner-set
+      constants (from Shippo's published USPS rate card for a representative
+      package in each band), **not** a live per-request Shippo API call —
+      `specs/09-shipping.md`'s "Why checkout can't do live per-address
+      rating" explains why Stripe Checkout can't support that without
+      collecting the address on this site first, which is out of scope here.
+      AC: a cart whose total weight crosses a band boundary produces the
+      correct tier's Stripe `shipping_options` entry; a cart with no
+      variants (should be unreachable, but test it) doesn't crash; existing
+      3.3 tamper/mocking tests still pass with tiers substituted for the
+      flat rate.
+      NOTE: band thresholds/prices are still hardcoded constants at this
+      task, same placeholder-until-Settings-exists status
+      `FLAT_RATE_SHIPPING_CENTS` had — `specs/04-admin.md`'s Settings screen
+      is where these become owner-editable, not this task.
 
 - [ ] **3.4 Webhook endpoint**
       Deps: 3.3. Verify signature. Handle `checkout.session.completed`,
@@ -2101,11 +2123,45 @@ service_type_id }`.
       AC: totals shown always equal the sum of stored line items — assert this
       rather than recomputing in the view.
 
-- [ ] **4.7 Fulfillment**
-      Deps: 4.6. Mark packed/shipped, tracking number + carrier, shipping-notice
-      email to the customer.
-      AC: status transitions are validated (cannot ship a refunded order); each
-      transition writes to `audit_log`.
+- [ ] **4.7 Fulfillment** (revised 2026-07-23 — see `specs/09-shipping.md`)
+      Deps: 4.6. Real USPS label purchase via Shippo, not a typed-in
+      carrier/tracking pair. Split into sub-tasks below (new external
+      provider + live-mode interlock is a full task on its own, mirroring
+      3.1/3.2's split for the Stripe client + sync service). This umbrella
+      item is ticked `[x]` only once both below are `[x]`.
+
+  - [ ] **4.7a Shippo client + rate/label service**
+        Deps: 3.1 (mirrors its pattern, no code dependency). `src/lib/shipping/client.ts`
+        — pinned client, fetch-based HTTP, `ALLOW_LIVE` interlock reusing
+        the exact `assertNotLiveModeUnlessAllowed` logic from
+        `src/lib/stripe/client.ts` (shared helper or copy verbatim with the
+        token param renamed — same rule, don't reinvent it).
+        `src/lib/shipping/config.ts` — `SHIP_FROM_ADDRESS`/`DEFAULT_PARCEL`
+        constants (owner-supplied real values; see fix_plan's "Blocked —
+        needs human" entry added alongside this task).
+        `src/lib/services/shipping.ts` — `getRatesForOrder(orderId)` (calls
+        Shippo rates using the order's real address + computed parcel
+        weight) and `purchaseLabel(orderId, rateId)` (buys the label,
+        writes a `shipments` row, sets `orders.fulfilled_at`/`status`).
+        AC: `getRatesForOrder` returns real Shippo rate options against a
+        mocked response (MSW, `tests/msw/shippo-server.ts` — same pattern as
+        `tests/msw/stripe-server.ts`); `purchaseLabel` writes exactly one
+        `shipments` row and flips order status; a repeat/duplicate purchase
+        attempt on an already-fulfilled order is rejected, not double-billed.
+        `src/lib/shipping/**` and the new service function held to the 90%
+        floor (`vitest.config.mts` thresholds gain a `src/lib/shipping/**`
+        entry alongside `services`/`stripe`/`auth`).
+
+  - [ ] **4.7b Fulfillment UI**
+        Deps: 4.7a, 4.6. Order detail: "Get shipping rates" → list of
+        carrier/service/price options → "Buy label" → tracking number/label
+        link shown, shipping-notice email sent (reuses 3.7's Resend
+        infrastructure). "Void label" action for a mis-purchased label
+        (writes a new `voided` `shipments` row, doesn't mutate/delete the
+        original — ledger-style, matching `inventory_movements`).
+        AC: status transitions are validated (cannot fetch rates/buy a label
+        for a refunded/cancelled order); each action (rate fetch excluded —
+        it's read-only) writes to `audit_log`.
 
 - [ ] **4.8 Refunds**
       Deps: 4.6, 3.4. Full and partial refunds through Stripe; restock optional.
@@ -2319,6 +2375,20 @@ false})` per product, since Prices can't be deleted once created, only
   the real catalog. (The 51 stray-objects cleanup decision above is separate
   and still open — it's about tidying up leftover test-mode clutter, not
   about the catalog sync itself.)
+
+- **Ship-from address and default parcel size, needed for 4.7a**
+  (`specs/09-shipping.md`). Every real Shippo rate quote and label purchase
+  needs the owner's actual return address and the actual box/mailer they
+  ship in (dimensions + packaging weight) — not something to invent a
+  placeholder for the way `FLAT_RATE_SHIPPING_CENTS` was, since a wrong
+  return address ends up printed on a real, paid-for label.
+- **USPS Hazmat/carrier-restriction confirmation for candles, needed before
+  4.7's first real label purchase and definitely before any international
+  shipping** (`specs/07-security-legal.md`'s existing flammable-goods flag,
+  `specs/09-shipping.md`'s "Legal / carrier restrictions" section). Finished
+  candles generally ship fine domestically via USPS ground/Priority, but the
+  owner (or Shippo support) should confirm the specific product line's
+  classification before this goes live — not a code decision.
 
 ## Done
 

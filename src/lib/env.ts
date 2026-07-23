@@ -20,6 +20,7 @@ const serverSchema = z.object({
   RESEND_API_KEY: z.string().min(1).optional(),
   ORDER_NOTIFICATION_EMAIL: z.string().email().optional(),
   SENTRY_DSN: z.string().url().optional(),
+  SHIPPO_API_TOKEN: z.string().min(1).optional(),
 });
 
 // Safe to ship to the browser — must be prefixed NEXT_PUBLIC_ by convention.
@@ -28,7 +29,10 @@ const clientSchema = z.object({
   NEXT_PUBLIC_SITE_URL: z.string().url(),
 });
 
-function parseOrThrow<T extends z.ZodType>(schema: T, source: unknown): z.infer<T> {
+function parseOrThrow<T extends z.ZodType>(
+  schema: T,
+  source: unknown,
+): z.infer<T> {
   const result = schema.safeParse(source);
   if (!result.success) {
     const issues = result.error.issues
@@ -46,7 +50,8 @@ const serverEnv = parseOrThrow(serverSchema, process.env);
 // into the browser bundle. A generic `process.env` lookup would just be
 // `undefined` client-side, since Next does not ship the full env object.
 export const clientEnv = parseOrThrow(clientSchema, {
-  NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
+  NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:
+    process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
   NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL,
 });
 

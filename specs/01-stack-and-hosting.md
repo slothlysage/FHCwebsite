@@ -2,17 +2,18 @@
 
 ## Decisions
 
-| Concern   | Choice                                        | Why                                                |
-| --------- | --------------------------------------------- | -------------------------------------------------- |
-| Framework | Next.js App Router + TS                       | Server rendering for SEO; one deployable           |
-| DB        | Postgres on Neon                              | Free tier, real SQL, branching for staging         |
-| ORM       | Drizzle                                       | Typed, thin, migrations are plain SQL you can read |
-| Payments  | Stripe Checkout (hosted)                      | Keeps card data off our servers entirely           |
-| Hosting   | Cloudflare Workers (`@opennextjs/cloudflare`) | Generous free tier, **commercial use permitted**   |
-| Files     | Cloudflare R2                                 | No egress fees                                     |
-| Email     | Resend                                        | 3k/month free, good DX                             |
-| Analytics | Plausible or self-hosted Umami                | Cookieless — no consent banner                     |
-| Errors    | Sentry                                        | Free tier sufficient                               |
+| Concern   | Choice                                        | Why                                                                                                                                                     |
+| --------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Framework | Next.js App Router + TS                       | Server rendering for SEO; one deployable                                                                                                                |
+| DB        | Postgres on Neon                              | Free tier, real SQL, branching for staging                                                                                                              |
+| ORM       | Drizzle                                       | Typed, thin, migrations are plain SQL you can read                                                                                                      |
+| Payments  | Stripe Checkout (hosted)                      | Keeps card data off our servers entirely                                                                                                                |
+| Shipping  | Shippo (USPS + other carriers)                | Pay-per-label, no monthly fee; fetch-based Node SDK works on Workers. Parcelcraft is Shopify-only and can't integrate here — see `specs/09-shipping.md` |
+| Hosting   | Cloudflare Workers (`@opennextjs/cloudflare`) | Generous free tier, **commercial use permitted**                                                                                                        |
+| Files     | Cloudflare R2                                 | No egress fees                                                                                                                                          |
+| Email     | Resend                                        | 3k/month free, good DX                                                                                                                                  |
+| Analytics | Plausible or self-hosted Umami                | Cookieless — no consent banner                                                                                                                          |
+| Errors    | Sentry                                        | Free tier sufficient                                                                                                                                    |
 
 ## On "free hosting" — read this before choosing
 
@@ -31,8 +32,12 @@ Realistic monthly cost at low volume:
 - Domain: already owned
 - **Stripe: 2.9% + $0.30 per transaction.** This is the real cost and it is
   unavoidable regardless of host.
+- **Shippo: $0/month** — pay only for the postage on labels actually
+  purchased (real USPS postage, passed through at cost; no per-label markup
+  on Shippo's base plan). Same "unavoidable, but not a hosting cost" bucket
+  as Stripe's fee.
 
-Expected: **$0–5/month** plus Stripe fees.
+Expected: **$0–5/month** plus Stripe fees plus real postage costs.
 
 If cold starts on the free Neon tier prove unacceptable, the cheapest fix is a
 $5/mo Postgres on Railway or Fly, not a bigger web host.

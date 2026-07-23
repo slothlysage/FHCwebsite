@@ -77,6 +77,20 @@ portion of the line. Checkout (phase 3) must compute it as
 `max(0, quantity - available_stock)` at inventory-decrement time. 0 means the
 line was fully covered by stock.
 
+## shipments (added — see `specs/09-shipping.md`)
+
+`id, order_id → orders, carrier, service_level, tracking_number, tracking_url,
+label_url, shippo_transaction_id, shippo_rate_id, cost_cents, currency,
+status ('purchased'|'voided'|'refunded'), created_at, voided_at`
+
+One row per label purchase attempt, not one column set per order —
+purchasing a label is an event (like an `inventory_movements` row), and a
+mis-purchased label needs a **void** record alongside the original rather
+than an overwritten field. `orders.fulfilled_at` (already present, see
+below) still marks the order-level "this shipped" timestamp; `shipments`
+holds the carrier/tracking/label detail and the audit trail if a label is
+voided and repurchased. Indexed on `(order_id)`.
+
 ## addresses
 
 `id, name, line1, line2, city, region, postal_code, country, phone`
@@ -139,6 +153,7 @@ checkout show up automatically with no extra plumbing.
 - `orders (created_at desc)`, `orders (status)`, `orders (email)`
 - `cart_items (cart_id, variant_id)` unique, `cart_items (cart_id)`
 - `inventory_movements (variant_id)`
+- `shipments (order_id)`
 
 ## Implementation notes (1.1)
 

@@ -36,11 +36,19 @@ form that writes an `inventory_movements` row with a required reason.
 **Orders** — list (filter by status, search by order number or email) and
 detail (items, snapshotted names and prices, totals, addresses, Stripe link,
 timeline built from `audit_log`).
-Actions: mark packed, mark shipped (requires carrier + tracking), cancel,
-refund (full or partial, with optional restock).
+Actions: mark packed; **get shipping rates and buy a USPS label** via
+Shippo (real carrier/service options quoted against the order's actual
+address and weight, not a typed-in carrier/tracking pair — see
+`specs/09-shipping.md`), which is what actually transitions an order to
+`fulfilled` and records the tracking number/label; void a mis-purchased
+label; cancel; refund (full or partial, with optional restock).
 
-**Settings** — shipping rates, tax settings pointer, discount codes, store
-contact details, change password.
+**Settings** — ship-from address and default parcel size (Shippo label
+purchases, `specs/09-shipping.md`), tax settings pointer, discount codes,
+store contact details, change password. Weight-banded checkout shipping
+prices (the static tiers described in `specs/09-shipping.md`, replacing the
+old single flat rate) are also owner-editable here rather than a code
+constant, once this settings surface is built.
 
 ## Rules
 

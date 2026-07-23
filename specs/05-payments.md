@@ -334,8 +334,14 @@ for real in 3.2b either).
 4.x's Settings page per specs/04-admin.md) — `checkout.ts` sends a single
 flat `shipping_rate_data` option (`FLAT_RATE_SHIPPING_CENTS = 600`, US-only
 via `shipping_address_collection.allowed_countries: ["US"]`). This is a
-placeholder the owner should confirm/replace with real carrier rates; see
-"Blocked — needs human". `automatic_tax: { enabled: true }` is sent
+placeholder; **`specs/09-shipping.md` (task 3.3b) replaces it** with 2–3
+static weight-banded `shipping_rate_data` options computed server-side from
+the cart's total weight, not a live per-address Shippo call (Stripe
+Checkout has no hook to quote a rate after the address is known — see that
+spec's "Why checkout can't do live per-address rating"). Real, accurate,
+per-shipment carrier rates are quoted and a label purchased later, at
+fulfillment time in the admin (`specs/09-shipping.md`'s admin flow), where
+the real destination address is already known. `automatic_tax: { enabled: true }` is sent
 unconditionally — this also requires an "origin address" to be configured
 in the Stripe Dashboard's Tax settings before a real (non-mocked) session
 creation call will succeed; not something code can satisfy, logged under
