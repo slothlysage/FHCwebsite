@@ -80,7 +80,8 @@ roll back a paid order.
 Re-check stock at session creation _and_ at webhook time. If stock is gone by
 the time payment lands, the order is created in a `needs_attention` state and the
 owner is notified — we do not silently refund, because a hand-made business often
-can make one more.
+can make one more. See `specs/04-admin.md`'s "Owner notifications" section for
+how that notification is delivered (in-app dashboard list + best-effort email).
 
 ## Testing
 
@@ -435,10 +436,17 @@ just get a boolean from.
   spec's "optionally restock" is deliberately NOT implemented here — see
   fix_plan.md's NOTE for 4.8.
 - `charge.dispute.created` → looks up the order the same way, but only
-  logs (order id or "no matching order"). No schema mutation: `orders.status`
-  has no `disputed` value and no owner-notification channel exists yet. See
-  fix_plan.md's "Blocked — needs human" entry — this needs a real decision,
-  not a guessed-at status value or a fake notification that isn't sent.
+  logs (order id or "no matching order"). No schema mutation yet: the
+  schema decision itself is now made — **`orders.disputed_at`, a nullable
+  timestamp column** (like `paid_at`/`fulfilled_at`), decided 2026-07-23,
+  not a `status` enum value, because a dispute is orthogonal to
+  payment/fulfillment state (an order can be `paid` _and_ disputed, or
+  `refunded` _and_ disputed) rather than replacing it the way
+  `needs_attention` (3.6) does. See `specs/02-data-model.md`'s `orders`
+  entry. Implementing the migration and setting the column here is still
+  future work, not done in this task. The notification channel is also
+  decided — see `specs/04-admin.md`'s "Owner notifications" — wiring this
+  handler up to both is 4.6/4.9's job.
 - anything else → `console.log` and fall through to `markWebhookEventProcessed`,
   satisfying "unhandled event type returns 200 and is logged."
 
@@ -583,6 +591,12 @@ real channel (email/SMS/dashboard) exists yet. Unlike disputes, though,
 `needs_attention` did get a real schema value in this task, because the spec
 named it explicitly; disputes remain unresolved because the spec only says
 "notify owner" without naming a status.
+**Channel design decided 2026-07-23** (see `specs/04-admin.md`'s "Owner
+notifications" and fix_plan.md's resolved "Blocked — needs human" entry):
+in-app dashboard list (primary, 4.6/4.9) plus a best-effort email via Resend
+to the admin user's own address once auth exists, falling back to the
+`ADMIN_EMAIL` env var until then. Wiring this handler up to that channel is
+still 4.6/4.9's implementation job, not done in this task.
 
 **Regression/concurrency tests** (`order-fulfillment.test.ts`): (1) a
 backorder variant oversold by a single fulfillment call keeps `status: "paid"`

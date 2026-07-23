@@ -56,11 +56,20 @@ unlikely.
 ## orders
 
 `id, order_number (human-readable, sequential), email, status ('pending'|
-'paid'|'fulfilled'|'cancelled'|'refunded'|'partially_refunded'),
+'paid'|'fulfilled'|'cancelled'|'refunded'|'partially_refunded'|
+'needs_attention' — added 3.6, webhook-time oversell guard, see
+`specs/05-payments.md`'s "Oversell" section),
 subtotal_cents, shipping_cents, tax_cents, discount_cents, total_cents,
 currency, stripe_session_id (unique), stripe_payment_intent_id,
 shipping_address_id, billing_address_id, discount_code_id, notes,
-created_at, paid_at, fulfilled_at`
+created_at, paid_at, fulfilled_at, disputed_at (nullable — decided
+2026-07-23: a **column**, not a `status`enum value, because a dispute is
+orthogonal to the order's fulfillment/payment state — it can land on an
+order that's`paid`, `fulfilled`, or even `refunded`, so it can't consume a
+mutually-exclusive `status`slot the way`needs_attention`does. Mirrors the
+existing`paid_at`/`fulfilled_at`pattern. Not yet added to the schema — see`specs/05-payments.md`'s dispute-handling note and fix_plan.md's resolved
+"No owner-notification channel" entry; a future task adds the migration and
+wires `charge.dispute.created` to set it)`
 
 ## order_items
 

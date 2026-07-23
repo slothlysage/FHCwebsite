@@ -21,7 +21,9 @@ login.
 ## Screens
 
 **Dashboard** — orders needing fulfillment, low-stock variants, last 30 days
-revenue. Read-only summary; every number links to the underlying list.
+revenue, and an **internal notifications** list (see "Owner notifications"
+below) surfacing `needs_attention` orders and disputes with an unread count.
+Read-only summary; every number/notification links to the underlying record.
 
 **Products** — table with search, status filter, and bulk publish/unpublish.
 Editor: name, slug (auto with manual override), description (markdown),
@@ -49,6 +51,36 @@ store contact details, change password. Weight-banded checkout shipping
 prices (the static tiers described in `specs/09-shipping.md`, replacing the
 old single flat rate) are also owner-editable here rather than a code
 constant, once this settings surface is built.
+
+## Owner notifications
+
+Decided 2026-07-23, resolving the gap `fix_plan.md` flagged for both the 3.4
+dispute handler and the 3.6 oversell guard (both previously only
+`console.error`). Two channels, both fed by the same trigger events
+(`needs_attention` orders — 3.6 — and `charge.dispute.created` — 3.4, once
+that handler gets a real status/column to key off):
+
+- **In-app** — the Dashboard's notifications list (above). This is the
+  primary channel and always fires; it needs no configuration and has no
+  external dependency. Implemented alongside 4.6 (orders dashboard) / 4.9
+  (audit log), since both already read the same order/audit data this list
+  surfaces.
+- **Email** — sent via Resend (3.7's existing infrastructure) as a
+  best-effort supplement, not the record of truth (the in-app list is).
+  Recipient address resolution, in order:
+  1. The logged-in admin's own `admin_users.email`, once admin auth (4.1/4.2)
+     exists to read it from.
+  2. Until then, or if that lookup fails, the `ADMIN_EMAIL` env var
+     (`.env.example`) — already reserved for the seed script's one-time admin
+     bootstrap, and reused here as the notification fallback rather than
+     introducing a second, overlapping env var.
+  3. If neither resolves to an address, skip the email and rely on the
+     in-app list — never block or fail the triggering webhook/order flow for
+     a missing notification address.
+
+A failed or skipped notification (either channel) must never roll back or
+block the order/webhook transaction that triggered it, matching the
+"email sent after commit" rule under Payments' Transactions section.
 
 ## Rules
 

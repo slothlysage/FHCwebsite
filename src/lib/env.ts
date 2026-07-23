@@ -10,6 +10,8 @@ const serverSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((value) => value === "true"),
+  // Doubles as the owner-notification fallback address (disputes,
+  // needs_attention orders) — see specs/04-admin.md's "Owner notifications".
   ADMIN_EMAIL: z.string().email().optional(),
   ADMIN_INITIAL_PASSWORD: z.string().min(1).optional(),
   R2_ACCOUNT_ID: z.string().min(1).optional(),
@@ -18,7 +20,6 @@ const serverSchema = z.object({
   R2_BUCKET: z.string().min(1).optional(),
   R2_PUBLIC_URL: z.string().url().optional(),
   RESEND_API_KEY: z.string().min(1).optional(),
-  ORDER_NOTIFICATION_EMAIL: z.string().email().optional(),
   SENTRY_DSN: z.string().url().optional(),
   SHIPPO_API_TOKEN: z.string().min(1).optional(),
 });

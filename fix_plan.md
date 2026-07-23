@@ -2148,7 +2148,7 @@ transaction.ts`, from 1.4b) — 3.4 had these as four independent writes;
       often can make one more"). Followed the spec over this bullet's own
       looser "refunded/flagged" phrasing.
       New `src/lib/repos/inventory.ts` function `lockVariantStock(variantId,
-    executor)` — a `pg_advisory_xact_lock` keyed on the variant id,
+  executor)` — a `pg_advisory_xact_lock` keyed on the variant id,
       transaction-scoped (auto-released at commit/rollback, no unlock call).
       `variant_stock` is an aggregate view, so `SELECT ... FOR UPDATE` isn't
       available; the advisory lock is the substitute. `order-fulfillment.ts`'s
@@ -2158,7 +2158,7 @@ transaction.ts`, from 1.4b) — 3.4 had these as four independent writes;
       `oversoldQuantity = max(0, quantity - stock)` — written to
       `order_items.oversoldQuantity` (schema column existed since 1.7, never
       actually computed until now). A backorder-allowed (`allowBackorder:
-    true`) variant being oversold is expected/legal (1.7) and does not flag
+  true`) variant being oversold is expected/legal (1.7) and does not flag
       the order; only an oversold **non**-backorder variant sets the whole
       order's status to `needs_attention`. Inventory is still decremented by
       the full requested quantity either way — the guard changes the order's
@@ -2327,6 +2327,15 @@ service_type_id }`.
       totals, addresses, Stripe payment link.
       AC: totals shown always equal the sum of stored line items — assert this
       rather than recomputing in the view.
+      Also implements the Dashboard's in-app notifications list decided
+      2026-07-23 (see `specs/04-admin.md`'s "Owner notifications" and the
+      resolved "Blocked — needs human" entry below): surfaces `needs_attention`
+      orders (3.6) with an unread count, each entry linking to the order. The
+      best-effort email half (Resend, to `admin_users.email` once 4.1/4.2
+      auth exists or `ADMIN_EMAIL` until then) can land in this task or be
+      split out — owner's call once the in-app list exists, not blocking.
+      AC addition: a `needs_attention` order appears in the notifications
+      list and its unread state clears on view.
 
 - [ ] **4.7 Fulfillment** (revised 2026-07-23 — see `specs/09-shipping.md`)
       Deps: 4.6. Real USPS label purchase via Shippo, not a typed-in
@@ -2621,22 +2630,35 @@ sync-stripe -- --apply` ran the create step for those same 45 variants, Stripe
     `specs/09-shipping.md` alongside `DEFAULT_PARCEL`, don't let it get
     lost as a comment.
     4.7a is now fully unblocked on config; nothing left in this entry.
-- **No `disputed` order status or owner-notification channel (3.4).**
-  `specs/05-payments.md`'s webhook table says `charge.dispute.created`
-  should "flag order, notify owner" — `orders.status`'s enum has no
-  `disputed` value (`pending|paid|fulfilled|cancelled|refunded|
-partially_refunded`) and no notification channel exists yet (3.7 wires
-  up Resend for receipt emails only, to the customer, not the owner).
-  `src/lib/stripe/webhook.ts`'s dispute handler currently only
-  `console.error`s the matched order id — a real fix needs either a schema
-  decision (new `disputed_at` column? repurpose a status value?) or an
-  owner-notification decision (email? SMS? dashboard badge, deferred to
-  4.9's audit log view?), not a guess made mid-webhook-task.
-  NOTE (3.6): the oversell guard hit the exact same "no owner-notification
-  channel" gap and also only `console.error`s (see `order-fulfillment.ts`) —
-  unlike disputes, that task's status value (`needs_attention`) _did_ get
-  added to the schema, since specs/05-payments.md named it explicitly. The
-  missing piece for both is only the notification channel itself.
+- ~~**No owner-notification channel (3.4/3.6).**~~ RESOLVED 2026-07-23
+  (owner decision) — the channel design itself is no longer blocked; see
+  `specs/04-admin.md`'s new "Owner notifications" section. Two channels,
+  both fed by the same trigger events: (1) an **in-app** notifications list
+  on the admin Dashboard — primary channel, no external dependency,
+  implemented alongside 4.6 (orders dashboard)/4.9 (audit log); (2) a
+  best-effort **email** via Resend (3.7's infra), addressed to the logged-in
+  admin's own `admin_users.email` once auth (4.1/4.2) exists, falling back
+  to the `ADMIN_EMAIL` env var (`.env.example`, already reserved for the
+  seed script's bootstrap) until then, or skipped entirely if neither
+  resolves — never blocking the triggering order/webhook flow. The
+  previously-separate, always-unused `ORDER_NOTIFICATION_EMAIL` env var
+  (dead since it was scaffolded, never read by any code) was removed from
+  `env.ts`/`.env.example` rather than kept alongside `ADMIN_EMAIL` as a
+  second, overlapping "notify the owner" address — flag if a different
+  split was actually intended.
+  (a) The schema question is now also decided, 2026-07-23: **`orders.
+disputed_at`, a nullable timestamp column** (mirrors `paid_at`/
+  `fulfilled_at`), not a `status` enum value — a dispute is orthogonal to
+  payment/fulfillment state (an order can be `paid` _and_ disputed, or
+  `refunded` _and_ disputed), unlike `needs_attention` (3.6) which really is
+  a mutually-exclusive state. See `specs/02-data-model.md`'s `orders` entry
+  and `specs/05-payments.md`'s dispute-handling note. The migration itself
+  and wiring `charge.dispute.created` to set the column are still future
+  work — not done by this decision alone, and not yet assigned a task
+  number (add one, or fold into 4.6/4.9, when picked up).
+  Still open: (b) neither 3.4's dispute handler nor 3.6's oversell guard
+  actually calls the notification channel yet — both still only
+  `console.error`/log. Wiring them up is 4.6/4.9's implementation job.
 - **USPS Hazmat/carrier-restriction confirmation for candles, needed before
   4.7's first real label purchase and definitely before any international
   shipping** (`specs/07-security-legal.md`'s existing flammable-goods flag,
