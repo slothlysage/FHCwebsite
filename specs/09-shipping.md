@@ -230,3 +230,42 @@ feature's env vars. Add the same commented placeholder to `.env.example`
 as the other provider keys (`shippo_test_...`, with a comment that it must
 stay test-mode until `ALLOW_LIVE=true`, matching `STRIPE_SECRET_KEY`'s
 comment).
+
+## Implementation notes (3.3b)
+
+Lives entirely in `src/lib/services/checkout.ts` — no new module, no
+`src/lib/shipping/**` directory yet (that's 4.7a's Shippo client, a
+separate later task; this one needs no Shippo API call at all, per the
+in-scope list above). `SHIPPING_BANDS` is a 3-entry array of
+`{ maxWeightGrams, amountCents, displayName }`, ordered ascending by
+ceiling; the last entry's `maxWeightGrams: null` means "no upper bound" so
+it always matches, which is also what keeps `selectShippingBand` a total
+function (`Array.find(...)!)` rather than needing a throwing fallback
+branch that `npm run verify`'s coverage gate could never actually exercise).
+
+Placeholder band prices set at implementation time (all owner-editable
+constants, flagged in `fix_plan.md`'s "Blocked — needs human" pending real
+numbers off Shippo's published USPS rate card):
+
+| Band       | Ceiling    | Price  |
+| ---------- | ---------- | ------ |
+| under 1 lb | ≤454g      | $5.00  |
+| 1-3 lb     | ≤1361g     | $8.00  |
+| 3+ lb      | no ceiling | $12.00 |
+
+**Total cart weight, not per-line.** `createCheckoutSession` sums
+`line.weightGrams * line.quantity` across every `CartLine` in the same loop
+that already builds Stripe line items and checks `stripePriceId` — one
+pass, no second iteration over `summary.lines`. `CartLine` (2.7's cart
+service, `src/lib/services/cart.ts`) gained a `weightGrams` field (copied
+straight from `product_variants.weight_grams`, already `NOT NULL` in the
+schema) since nothing had exposed per-line weight to a reader before this
+task needed it.
+
+**Still exactly one `shipping_options` entry**, not 2-3 for the customer to
+pick between — the band is resolved server-side from the real cart weight
+before the Stripe session is created, matching how the flat rate it
+replaces worked. `specs/09-shipping.md`'s "static, weight-banded... options"
+phrasing describes the _set of bands the code can choose from_, not what's
+shown to the customer at once; only the one matching band's
+`shipping_rate_data` goes into the session Stripe hosts.

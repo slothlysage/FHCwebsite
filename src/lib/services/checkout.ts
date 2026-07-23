@@ -10,11 +10,50 @@ import { stripe } from "@/lib/stripe/client";
 import { env } from "@/lib/env";
 
 // No shipping-rate admin/config exists yet (that lands with 4.x's Settings
-// page per specs/04-admin.md) — this is a single flat US rate so 3.3 can
-// ship a real, working checkout without inventing that admin surface early.
-// Placeholder amount, logged under fix_plan.md's "Blocked — needs human" for
-// the owner to confirm/replace once real carrier rates are known.
-const FLAT_RATE_SHIPPING_CENTS = 600;
+// page per specs/04-admin.md) — these are static, weight-banded flat rates
+// so 3.3b can ship a real, working checkout without inventing that admin
+// surface, or a live per-address Shippo rate call, early (see
+// specs/09-shipping.md's "Why checkout can't do live per-address rating").
+// Placeholder amounts, logged under fix_plan.md's "Blocked — needs human"
+// for the owner to confirm/replace with real numbers eyeballed off Shippo's
+// published USPS rate card once that account exists.
+// `maxWeightGrams: null` means "no upper bound" — the last band always
+// matches, so `selectShippingBand` never falls through with no match.
+type ShippingBand = {
+  maxWeightGrams: number | null;
+  amountCents: number;
+  displayName: string;
+};
+
+const SHIPPING_BANDS: ShippingBand[] = [
+  {
+    maxWeightGrams: 454, // under 1 lb
+    amountCents: 500,
+    displayName: "Standard shipping (under 1 lb)",
+  },
+  {
+    maxWeightGrams: 1361, // 1-3 lb
+    amountCents: 800,
+    displayName: "Standard shipping (1-3 lb)",
+  },
+  {
+    maxWeightGrams: null, // 3+ lb
+    amountCents: 1200,
+    displayName: "Standard shipping (3+ lb)",
+  },
+];
+
+// Picks the first band whose ceiling the total cart weight doesn't exceed.
+// The last band's `maxWeightGrams: null` always matches, so the `find` can
+// never return undefined for any input, including 0 (an
+// unreachable-in-practice empty cart, but AC requires it not crash) — the
+// non-null assertion reflects that guarantee rather than hiding a real gap.
+function selectShippingBand(totalWeightGrams: number): ShippingBand {
+  return SHIPPING_BANDS.find(
+    (band) =>
+      band.maxWeightGrams === null || totalWeightGrams <= band.maxWeightGrams,
+  )!;
+}
 
 export type CreateCheckoutSessionResult =
   | { ok: true; sessionId: string; url: string }
@@ -42,12 +81,16 @@ export async function createCheckoutSession(
   // has on file for that Price — not a number this function ever computes
   // or a client could ever reach.
   const lineItems: Array<{ price: string; quantity: number }> = [];
+  let totalWeightGrams = 0;
   for (const line of summary.lines) {
     if (!line.stripePriceId) {
       return { ok: false, reason: "unavailable" };
     }
     lineItems.push({ price: line.stripePriceId, quantity: line.quantity });
+    totalWeightGrams += line.weightGrams * line.quantity;
   }
+
+  const shippingBand = selectShippingBand(totalWeightGrams);
 
   const session = await stripe.checkout.sessions.create(
     {
@@ -58,9 +101,9 @@ export async function createCheckoutSession(
         {
           shipping_rate_data: {
             type: "fixed_amount",
-            display_name: "Standard shipping",
+            display_name: shippingBand.displayName,
             fixed_amount: {
-              amount: FLAT_RATE_SHIPPING_CENTS,
+              amount: shippingBand.amountCents,
               currency: "usd",
             },
           },

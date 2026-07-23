@@ -1949,27 +1949,56 @@ true}` (needs a Stripe Dashboard Tax origin address before a real,
       NOTE for 3.4/3.5: correlate the webhook back to a cart via
       `session.metadata.cart_id` only — there is no `order_draft_id`.
 
-- [ ] **3.3b Weight-tiered shipping rates at checkout** (added 2026-07-23,
+- [x] **3.3b Weight-tiered shipping rates at checkout** (added 2026-07-23,
       owner request — see `specs/09-shipping.md`)
-      Deps: 3.3. Replaces `checkout.ts`'s single
-      `FLAT_RATE_SHIPPING_CENTS = 600` with 2–3 static, weight-banded
-      `shipping_rate_data` options (e.g. under 1 lb / 1–3 lb / 3+ lb),
-      computed server-side from `sum(order_items.quantity ×
-product_variants.weight_grams)` across the cart. Prices are owner-set
-      constants (from Shippo's published USPS rate card for a representative
-      package in each band), **not** a live per-request Shippo API call —
-      `specs/09-shipping.md`'s "Why checkout can't do live per-address
-      rating" explains why Stripe Checkout can't support that without
-      collecting the address on this site first, which is out of scope here.
-      AC: a cart whose total weight crosses a band boundary produces the
-      correct tier's Stripe `shipping_options` entry; a cart with no
-      variants (should be unreachable, but test it) doesn't crash; existing
-      3.3 tamper/mocking tests still pass with tiers substituted for the
-      flat rate.
+      Deps: 3.3. Replaced `checkout.ts`'s single
+      `FLAT_RATE_SHIPPING_CENTS = 600` with a 3-entry `SHIPPING_BANDS`
+      table (under 1 lb ≤454g → $5.00, 1-3 lb ≤1361g → $8.00, 3+ lb no
+      ceiling → $12.00) and a pure `selectShippingBand(totalWeightGrams)`
+      helper that picks the first band whose ceiling isn't exceeded (last
+      band's `maxWeightGrams: null` always matches, keeping the function
+      total via `.find(...)!` rather than an unreachable throw branch that
+      coverage could never exercise). `createCheckoutSession` sums
+      `line.weightGrams * line.quantity` across the cart in the same loop
+      that already builds Stripe line items, then sends exactly one
+      `shipping_options` entry for the matching band — not 2-3 for the
+      customer to choose between, matching how the flat rate it replaces
+      worked (server picks the rate, Stripe just displays it).
+      `CartLine` (2.7, `src/lib/services/cart.ts`) gained a `weightGrams`
+      field, copied from `product_variants.weight_grams`, since nothing had
+      exposed per-line weight to a reader before this task needed it.
+      Tests: 3 new integration cases in `checkout.test.ts` (under-1lb tier,
+      crossing into 1-3lb, crossing into 3+lb via two summed lines), plus
+      `makeSyncedCart`'s test helper gained an optional per-line
+      `weightGrams` override (default 100, unchanged for every pre-existing
+      test) to make weight controllable per test. The empty-cart AC ("a
+      cart with no variants doesn't crash") was already covered by the
+      pre-existing `empty_cart` test, which returns before shipping is ever
+      computed — no new test needed for that half. All three new tests
+      confirmed red first (asserted band-specific `displayName`/`amount`,
+      got back the old flat `"Standard shipping"` / `600` instead) before
+      implementing. The existing flat-rate shipping test
+      (renamed "applies a single weight-tiered shipping rate") needed no
+      assertion changes — it only checked `shippingOptions` has length 1
+      and `amount > 0`, which holds for any band — satisfying the AC's
+      "existing 3.3 tamper/mocking tests still pass with tiers substituted
+      for the flat rate" without touching them.
+      AC met: `npm run verify` green — 45 files, 379 tests,
+      98.31/95.13/100/98.24% global coverage (`src/lib/services/**`
+      aggregate 97.54/93.86/100/97.46%, both floors clear;
+      `checkout.ts` alone 94.44/87.5/100/94.44%, the one uncovered branch
+      being the pre-existing `!session.url` guard, unrelated to this
+      task), build passes (`ƒ /cart` unchanged in the route table).
+      `specs/09-shipping.md` gained an "Implementation notes (3.3b)"
+      section with the band table and the "still one shipping_options
+      entry" clarification, matching the loop's convention for other
+      payments/checkout tasks.
       NOTE: band thresholds/prices are still hardcoded constants at this
       task, same placeholder-until-Settings-exists status
       `FLAT_RATE_SHIPPING_CENTS` had — `specs/04-admin.md`'s Settings screen
-      is where these become owner-editable, not this task.
+      is where these become owner-editable, not this task. Added to
+      "Blocked — needs human" below: the $5/$8/$12 numbers are guesses, not
+      real Shippo rate-card figures, since Shippo isn't wired up until 4.7a.
 
 - [ ] **3.4 Webhook endpoint**
       Deps: 3.3. Verify signature. Handle `checkout.session.completed`,
@@ -2376,6 +2405,13 @@ false})` per product, since Prices can't be deleted once created, only
   and still open — it's about tidying up leftover test-mode clutter, not
   about the catalog sync itself.)
 
+- **Weight-tiered shipping prices are guesses, not real rates (3.3b).**
+  `checkout.ts`'s `SHIPPING_BANDS` charges $5.00 (under 1 lb), $8.00 (1-3
+  lb), $12.00 (3+ lb) — made-up numbers picked to be "strictly better than
+  one flat rate," not numbers read off a real Shippo/USPS rate card (Shippo
+  isn't integrated until 4.7a, so there's no rate card to read yet). Owner
+  should confirm/replace before launch, same category as the flat rate it
+  replaced.
 - **Ship-from address and default parcel size, needed for 4.7a**
   (`specs/09-shipping.md`). Every real Shippo rate quote and label purchase
   needs the owner's actual return address and the actual box/mailer they

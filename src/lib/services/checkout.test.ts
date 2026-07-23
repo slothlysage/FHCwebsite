@@ -68,6 +68,7 @@ describe("createCheckoutSession", () => {
       priceCents: number;
       stripePriceId: string;
       quantity: number;
+      weightGrams?: number;
     }>,
   ) {
     const cart = await createCart();
@@ -85,7 +86,7 @@ describe("createCheckoutSession", () => {
         sku: `TEST-CHECKOUT-${cart.id}-${index}`,
         name: "Default",
         priceCents: line.priceCents,
-        weightGrams: 100,
+        weightGrams: line.weightGrams ?? 100,
         stripePriceId: line.stripePriceId,
       });
       seedStripePrice({
@@ -171,7 +172,7 @@ describe("createCheckoutSession", () => {
     );
   });
 
-  it("collects a US shipping address and applies a flat shipping rate", async () => {
+  it("collects a US shipping address and applies a single weight-tiered shipping rate", async () => {
     const cart = await makeSyncedCart([
       { priceCents: 1000, stripePriceId: "price_checkout_ship", quantity: 1 },
     ]);
@@ -182,6 +183,72 @@ describe("createCheckoutSession", () => {
     expect(session?.shippingAddressCollection).toEqual(["US"]);
     expect(session?.shippingOptions).toHaveLength(1);
     expect(session?.shippingOptions[0]?.amount).toBeGreaterThan(0);
+  });
+
+  it("charges the under-1lb tier for a cart whose total weight is below 454g", async () => {
+    const cart = await makeSyncedCart([
+      {
+        priceCents: 1000,
+        stripePriceId: "price_checkout_light",
+        quantity: 1,
+        weightGrams: 200,
+      },
+    ]);
+
+    await createCheckoutSession(cart.id, { idempotencyKey: "test-tier-light" });
+
+    const [session] = getStripeFakeCheckoutSessions();
+    expect(session?.shippingOptions).toHaveLength(1);
+    expect(session?.shippingOptions[0]).toEqual({
+      displayName: "Standard shipping (under 1 lb)",
+      amount: 500,
+    });
+  });
+
+  it("charges the 1-3lb tier once cart weight crosses the first band boundary", async () => {
+    const cart = await makeSyncedCart([
+      {
+        priceCents: 1000,
+        stripePriceId: "price_checkout_mid",
+        quantity: 3,
+        weightGrams: 200,
+      },
+    ]);
+    // 3 x 200g = 600g, just past the 454g under-1lb ceiling.
+
+    await createCheckoutSession(cart.id, { idempotencyKey: "test-tier-mid" });
+
+    const [session] = getStripeFakeCheckoutSessions();
+    expect(session?.shippingOptions[0]).toEqual({
+      displayName: "Standard shipping (1-3 lb)",
+      amount: 800,
+    });
+  });
+
+  it("charges the 3+lb tier once combined cart weight (quantity x per-line weight, summed across lines) crosses the second band boundary", async () => {
+    const cart = await makeSyncedCart([
+      {
+        priceCents: 1000,
+        stripePriceId: "price_checkout_heavy_a",
+        quantity: 2,
+        weightGrams: 500,
+      },
+      {
+        priceCents: 500,
+        stripePriceId: "price_checkout_heavy_b",
+        quantity: 1,
+        weightGrams: 400,
+      },
+    ]);
+    // (2 x 500g) + (1 x 400g) = 1400g, past the 1361g 1-3lb ceiling.
+
+    await createCheckoutSession(cart.id, { idempotencyKey: "test-tier-heavy" });
+
+    const [session] = getStripeFakeCheckoutSessions();
+    expect(session?.shippingOptions[0]).toEqual({
+      displayName: "Standard shipping (3+ lb)",
+      amount: 1200,
+    });
   });
 
   it("enables Stripe Tax", async () => {

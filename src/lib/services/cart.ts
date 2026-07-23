@@ -22,6 +22,7 @@ export type CartLine = {
   priceCents: number;
   quantity: number;
   lineTotalCents: number;
+  weightGrams: number;
   stock: number;
   allowBackorder: boolean;
   // Null until the variant has been synced to Stripe (3.2's
@@ -164,6 +165,7 @@ export async function getCartSummary(cartId: string): Promise<CartSummary> {
       priceCents: variant.priceCents,
       quantity,
       lineTotalCents: variant.priceCents * quantity,
+      weightGrams: variant.weightGrams,
       stock,
       allowBackorder: variant.allowBackorder,
       stripePriceId: variant.stripePriceId,
