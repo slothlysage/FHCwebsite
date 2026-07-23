@@ -90,3 +90,37 @@ can make one more.
 - E2E: Stripe CLI `stripe listen --forward-to localhost:3000/api/webhooks/stripe`.
 - Test cards: `4242424242424242` success, `4000000000000002` decline,
   `4000002500003155` 3DS required, `4000000000009995` insufficient funds.
+
+## Implementation notes (3.1)
+
+`src/lib/stripe/client.ts` exports a module-scope singleton `stripe`
+(`new Stripe(env.STRIPE_SECRET_KEY, { apiVersion: STRIPE_API_VERSION })`) plus
+the exported `STRIPE_API_VERSION` constant itself (`"2026-06-24.dahlia"`,
+matching the installed `stripe@22.3.2` SDK's own compiled default —
+`node_modules/stripe/cjs/apiVersion.d.ts` — so request/response typings stay
+in sync with the pinned string). Pinned explicitly rather than left to float
+to the Stripe account's dashboard-configured default, so an unannounced
+Stripe-side API upgrade can't silently change request/response shapes under
+us.
+
+The live-mode interlock (AGENT.md: "Never touch Stripe live mode") is a
+plain guard function, `assertNotLiveModeUnlessAllowed(secretKey, allowLive)`,
+called once at module load before constructing the client: throws if the key
+starts with `sk_live_` and `env.ALLOW_LIVE` is not `true`. This reuses 0.4's
+existing `ALLOW_LIVE` boolean from `src/lib/env.ts` — no new env var needed.
+
+Test pattern follows `src/lib/env.test.ts` exactly: `vi.resetModules()` +
+reassigning `process.env` + dynamic `import("./client")` per case, since both
+`env.ts` and `client.ts` parse/construct at module load, not lazily. 5 unit
+tests in `src/lib/stripe/client.test.ts`: test-key succeeds, live-key with
+`ALLOW_LIVE` unset throws naming `ALLOW_LIVE`, live-key with
+`ALLOW_LIVE=false` throws, live-key with `ALLOW_LIVE=true` succeeds, and the
+exported `STRIPE_API_VERSION` matches a `YYYY-MM-DD...` shape. No network
+call is made by any of these — constructing a `Stripe` instance never
+contacts the API, so no mock/fixture is needed for this task specifically;
+3.2+ (catalog sync, checkout sessions) are what will need `stripe-mock` or
+recorded fixtures per the Testing section above.
+
+NOTE for 3.2+: import `{ stripe }` from `@/lib/stripe/client`, don't
+construct a second `new Stripe(...)` anywhere else — that would defeat the
+interlock and the pinned version for whichever call site skipped it.

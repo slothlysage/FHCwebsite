@@ -1696,7 +1696,7 @@ allow_backorder` rule — a backorder-enabled variant has no real
       then one batch image lookup) minus the +1-row `hasNextPage` peek,
       which doesn't apply to a fixed-size highlight reel.
       `src/app/page.tsx` — now an async Server Component (`export const
-    dynamic = "force-dynamic"`, same rationale as every other
+  dynamic = "force-dynamic"`, same rationale as every other
       catalog-backed route: 2.2/2.5/2.6c). Renders the real brand
       name/description already approved for SEO use in `layout.tsx`'s root
       `metadata` (not new marketing copy — reusing "Handmade candles, body
@@ -1746,10 +1746,37 @@ allow_backorder` rule — a backorder-enabled variant has no real
 
 ## Phase 3 — Payments
 
-- [ ] **3.1 Stripe client + test-mode wiring**
+- [x] **3.1 Stripe client + test-mode wiring**
       Deps: 0.4. Singleton client, pinned API version, test keys only.
       AC: a unit test asserts the client refuses to initialize with a `sk_live_*` key
       unless `ALLOW_LIVE=true`.
+      Installed `stripe@22.3.2`. New `src/lib/stripe/client.ts` — module-load
+      singleton `stripe` built via `new Stripe(env.STRIPE_SECRET_KEY,
+    { apiVersion: STRIPE_API_VERSION })`, `STRIPE_API_VERSION` pinned to
+      `"2026-06-24.dahlia"` (the installed SDK's own compiled default, kept
+      as an explicit literal rather than left to float). A guard function,
+      `assertNotLiveModeUnlessAllowed`, runs once before construction and
+      throws (naming `ALLOW_LIVE`) if `STRIPE_SECRET_KEY` starts with
+      `sk_live_` and 0.4's existing `env.ALLOW_LIVE` boolean isn't `true` —
+      no new env var needed, reused as-is.
+      `src/lib/stripe/client.test.ts` (5 unit tests, following
+      `env.test.ts`'s `vi.resetModules()` + reassigned `process.env` +
+      dynamic-import-per-case pattern since both `env.ts` and `client.ts`
+      parse/construct at module load): test key succeeds; live key with
+      `ALLOW_LIVE` unset throws naming `ALLOW_LIVE`; live key with
+      `ALLOW_LIVE=false` throws; live key with `ALLOW_LIVE=true` succeeds;
+      `STRIPE_API_VERSION` matches a dated-version shape. Confirmed red
+      first (import-resolution error, module didn't exist) before writing
+      `client.ts`. No network mock needed — constructing a `Stripe` instance
+      makes no API call.
+      AC met: `npm run verify` green — 41 files, 345 tests,
+      98.84/95.88/100/98.8% coverage (global 80% floor and the
+      `src/lib/stripe/**` 90% floor — `client.ts` itself is 100% covered —
+      both clear), build passes.
+      See `specs/05-payments.md`'s new "Implementation notes (3.1)" section
+      for the full shape and a NOTE for 3.2+ to import `{ stripe }` from
+      here rather than constructing a second client that bypasses the
+      interlock.
 
 - [ ] **3.2 Catalog → Stripe sync**
       Deps: 1.3, 3.1. See `specs/05-payments.md`. Database is the source of truth;
