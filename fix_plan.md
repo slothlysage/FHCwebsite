@@ -2566,7 +2566,7 @@ code} | null`. `discount.ts` gained `DiscountRejectReason` (an
         `clearExpiredLock` (a past `locked_until` starts a fresh window).
         `src/lib/auth/login.ts` — `attemptLogin(email, password)` →
         `{ok:true, adminUserId} | {ok:false, reason: "invalid_credentials" |
-    "locked"}`. A fixed dummy argon2id hash is verified against on an
+"locked"}`. A fixed dummy argon2id hash is verified against on an
         unknown email so that path costs the same wall-clock time as a
         real wrong-password check (user-enumeration timing defense).
         Sessions/cookies/CSRF/HTTP routes are explicitly out of scope — 4.1b.
@@ -2605,22 +2605,76 @@ code} | null`. `discount.ts` gained `DiscountRejectReason` (an
         only has `admin_users`. Session issuance/expiry/rotation/revocation
         is entirely 4.1b's scope.
 
-  - [ ] **4.1b Sessions + cookies + CSRF + login/logout routes**
-        Deps: 4.1a. `sessions` repo (create/find-by-token-hash/revoke,
-        expiry check), 32-random-byte session tokens (base64url, only the
-        SHA-256 hash stored per the spec — mirrors how `webhook_events`/
-        discount codes never store a raw secret either), `httpOnly`/
-        `Secure`/`SameSite=Lax`/`Path=/`/7-day cookie, rotated on every
-        login (revoke old + issue new, not reuse). CSRF: double-submit
-        token on every mutating request. Admin login/logout API routes
-        (or Server Actions — decide against how 4.2's route-protection
-        middleware wants to read the session) wiring `attemptLogin` (4.1a)
-        to actual cookie issuance. Seed-script wrapper for the one real
-        admin account (see 4.1a's NOTE above) belongs here unless split out.
-        AC (the remaining slice of 4.1's AC not covered by 4.1a):
-        expired-session and CSRF-missing paths are each tested; session
-        rotation on login is tested; server-side revocation actually
-        invalidates a cookie's session.
+  - [x] **4.1b Sessions repo + issuance/rotation/verification service**
+        Deps: 4.1a. Split further (2026-07-23) from the original 4.1b —
+        same rationale as 4.1a/4.1b's own split: the session token
+        lifecycle is pure service+repo work, independently testable
+        against the real dev database with no HTTP/cookie/CSRF layer
+        involved. `src/lib/repos/sessions.ts` — createSession,
+        getSessionByTokenHash, revokeSession (sets `revoked_at`), mirroring
+        `admin-users.ts`'s shape exactly (typed `$inferSelect`/
+        `$inferInsert`, `returning()`, `[x]!` non-null assertion on
+        single-row results). `src/lib/auth/session.ts` — 32-random-byte
+        session tokens (`node:crypto`'s `randomBytes(32).toString
+    ("base64url")`), only the SHA-256 hash (`createHash("sha256")`)
+        stored per the spec — mirrors how `webhook_events`/discount codes
+        never store a raw secret either. `issueSession(adminUserId,
+    options?)` (generate token, hash, insert, 7-day default expiry,
+        optional `expiresAt` override used only by the expired-session
+        test), `rotateSession(adminUserId, previousToken, options?)`
+        (revokes the old session by its raw token if one is presented via
+        `revokeSessionByToken`, then always issues a new one — login
+        always rotates, per spec; a fresh/first login with no previous
+        token just issues), `verifySession(token)` (hash → look up →
+        reject `not_found`/`revoked`/`expired`, each a distinct reason —
+        checked in that order since a revoked-and-expired session should
+        report revocation, the more specific administrative fact),
+        `revokeSessionByToken` (logout — silently a no-op for an unknown
+        token, since "log out" on an already-invalid session shouldn't
+        error).
+        Tests: `sessions.test.ts` (4 integration cases against the real
+        dev database — create, find-by-hash, not-found, revoke);
+        `session.test.ts` (9 integration cases — token shape/expiry-window
+        assertion, two issuances produce different tokens/hashes, a fresh
+        session verifies valid, unknown token is `not_found`, an
+        already-expired session is `expired`, a revoked session is
+        `revoked`, rotation revokes the old token and the new one verifies
+        valid, rotation with `undefined` previous token still issues a
+        working session, revoking an unknown token resolves without
+        throwing). Both files confirmed red first (import-resolution
+        error, neither module existed) before implementing.
+        AC met: 100% statement/branch/function/line coverage on both new
+        modules; full `npm run verify` green — 60 files, 507 tests,
+        97.99/93.86/99.62/97.93% coverage (global 80% floor and the
+        `src/lib/auth/**` 90% floor both clear — `sessions.ts`/`session.ts`
+        don't appear in the uncovered-lines report at all), build passes.
+        NOTE for 4.1c: cookie writing, CSRF, and the login/logout HTTP
+        routes (Route Handlers, following `src/app/api/webhooks/stripe/
+    route.ts`'s thin-wrapper pattern — all logic in `src/lib`, the
+        route file just glues request/response — and `src/lib/cart-
+    cookie.ts`'s `next/headers` `cookies()` pattern, which is
+        `vi.mock`-able the same way its own test file already does) are
+        that task's job, not touched here.
+
+  - [ ] **4.1c CSRF + cookie issuance + login/logout routes + admin seed**
+        Deps: 4.1b. Wires `attemptLogin` (4.1a) + the session service
+        (4.1b) to real HTTP: `httpOnly`/`Secure`/`SameSite=Lax`/`Path=/`/
+        7-day session cookie (mirrors `src/lib/cart-cookie.ts`'s
+        `next/headers` cookies() pattern, vi.mock-able the same way per
+        its test file). CSRF: double-submit token on every mutating
+        request. Admin login/logout API routes (or Server Actions — decide
+        against how 4.2's route-protection middleware wants to read the
+        session) as thin wrappers, matching the stripe webhook route's
+        shape (all real logic in `src/lib`, route file just glues
+        request/response). Seed-script wrapper (`scripts/seed-admin.mts`,
+        alongside `import-catalog.mts`/`sync-stripe.mts`) for the one real
+        `admin_users` row from `ADMIN_EMAIL`/`ADMIN_INITIAL_PASSWORD`
+        (4.1a's NOTE — `createAdminUser` exists but nothing calls it yet).
+        AC (the remaining slice of 4.1's original AC): expired-session and
+        CSRF-missing paths are each tested; session rotation on login is
+        tested end-to-end through the login route; server-side revocation
+        (logout) actually invalidates a cookie's session on the next
+        request.
 
 - [ ] **4.2 Route protection**
       Deps: 4.1. Middleware guarding `/admin/**` and admin API routes.
