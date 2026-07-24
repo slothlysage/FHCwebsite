@@ -53,6 +53,30 @@ describe("EditProductPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows a Publish button for a draft product and an Unpublish button for a published one", async () => {
+    const draft = await createProduct({
+      slug: "test-edit-page-status-draft",
+      name: "Draft Candle",
+    });
+    insertedIds.push(draft.id);
+    render(await withParams(draft.id));
+    expect(screen.getByRole("button", { name: "Publish" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Delete product" }),
+    ).toBeInTheDocument();
+
+    const published = await createProduct({
+      slug: "test-edit-page-status-published",
+      name: "Published Candle",
+      status: "published",
+    });
+    insertedIds.push(published.id);
+    render(await withParams(published.id));
+    expect(
+      screen.getByRole("button", { name: "Unpublish" }),
+    ).toBeInTheDocument();
+  });
+
   it("rejects (404s) for an unknown product id", async () => {
     await expect(
       withParams("00000000-0000-0000-0000-000000000000"),

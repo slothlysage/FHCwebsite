@@ -293,6 +293,41 @@ products.ts`'s `listProducts` gained a `search` option: a case-insensitive
   each row is plain text for now. No shared admin layout/nav either; the
   page stands alone, same precedent as 4.2a's login page.
 
+### Implementation notes (4.3d — publish/unpublish + soft-delete actions)
+
+- **Publish-gate logic lives in `src/lib/services/product-publish-gate.ts`**,
+  a pure function (`checkPublishGate({product, images, variants})`, no DB
+  access) that reports every failing requirement at once, not just the
+  first — mirrors `catalog-importer.ts`'s "pure, unit-tested-directly
+  service" precedent. The Server Action (`admin-products.ts`'s
+  `publishProductAction`) owns fetching the product/images/variants and
+  translating each `PublishGateFailure` into a plain-language sentence; the
+  gate itself only returns typed failure codes.
+- **`audit_log` writes are append-only** (`src/lib/repos/audit-log.ts`'s
+  `createAuditLogEntry` — no update/delete function exists on purpose) and
+  attributed via `src/lib/auth/current-admin.ts`'s `getCurrentAdminUserId()`,
+  which resolves the session cookie to an admin id and returns `undefined`
+  (not a throw) on a missing/invalid/expired session — losing attribution
+  must never block the mutation itself, since `audit_log.admin_user_id` is
+  nullable.
+- **Publish/unpublish redirect back to the edit page** (not the products
+  list) so the owner immediately sees the new status; soft-delete redirects
+  to the list, since the product being edited is gone. All three
+  `revalidatePath("/admin/products")` regardless, so the list's status
+  filter stays fresh too.
+- **Only soft-delete gets a confirmation dialog.** The Rules section below
+  says "delete product, cancel order" require confirmation naming the
+  record — publish/unpublish are reversible (toggle back any time) and
+  deliberately don't get one. `product-status-actions.tsx`'s delete form
+  uses a plain `window.confirm(...)` in `onSubmit`, `preventDefault()`ing
+  if declined; there's no modal component in the codebase yet to reach for
+  instead.
+- **Bulk publish/unpublish (the Products screen line above) is still
+  unbuilt** — 4.3d only wired the single-product actions on the edit
+  screen. `publishProductAction`/`unpublishProductAction` already take just
+  a `productId` each, so a future bulk-actions UI on the list page can loop
+  a checkbox selection over the existing actions rather than adding new ones.
+
 ## Rules
 
 - Every mutation writes an `audit_log` row with before/after JSON.

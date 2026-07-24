@@ -6,8 +6,21 @@ import { redirect } from "next/navigation";
 import { csrfTokensMatch } from "@/lib/auth/csrf";
 import { readCsrfCookie } from "@/lib/auth/csrf-cookie";
 import { CSRF_FIELD_NAME } from "@/lib/auth/csrf-token";
-import { createProduct, updateProduct } from "@/lib/repos/products";
+import { getCurrentAdminUserId } from "@/lib/auth/current-admin";
+import { createAuditLogEntry } from "@/lib/repos/audit-log";
+import { listImagesByProductId } from "@/lib/repos/images";
+import {
+  createProduct,
+  getProductById,
+  softDeleteProduct,
+  updateProduct,
+} from "@/lib/repos/products";
+import { listVariantsByProductId } from "@/lib/repos/variants";
 import { generateUniqueProductSlug } from "@/lib/services/product-slug";
+import {
+  checkPublishGate,
+  type PublishGateFailure,
+} from "@/lib/services/product-publish-gate";
 import {
   parseProductForm,
   productFormFieldErrors,
@@ -85,6 +98,130 @@ export async function createProductAction(
     ingredients: result.data.ingredients ?? null,
     safetyInfo: result.data.safetyInfo ?? null,
     careInfo: result.data.careInfo ?? null,
+  });
+
+  revalidatePath(PRODUCTS_PATH);
+  redirect(PRODUCTS_PATH);
+}
+
+// 4.3d — publish/unpublish/soft-delete. Same module, same CSRF/state-return
+// conventions as the two actions above (see 4.3c's NOTE). `useActionState`
+// still fits here even though these forms have no per-field input: it's
+// what lets a publish-gate failure (or a csrf mismatch) render as an alert
+// on the edit page instead of a generic thrown error.
+export type MutationState = {
+  formError?: string;
+};
+
+const PUBLISH_GATE_MESSAGES: Record<PublishGateFailure, string> = {
+  no_image_with_alt_text: "add at least one image with alt text",
+  no_active_priced_variant: "add at least one active variant with a price",
+  missing_ingredients: "fill in ingredients",
+  missing_safety_info: "fill in safety info",
+};
+
+function editPagePath(productId: string): string {
+  return `${PRODUCTS_PATH}/${productId}/edit`;
+}
+
+export async function publishProductAction(
+  productId: string,
+  _prevState: MutationState,
+  formData: FormData,
+): Promise<MutationState> {
+  if (!(await csrfOk(formData))) {
+    return { formError: CSRF_FORM_ERROR };
+  }
+
+  const product = await getProductById(productId);
+  if (!product) {
+    return { formError: "Product not found." };
+  }
+
+  const [images, variants] = await Promise.all([
+    listImagesByProductId(productId),
+    listVariantsByProductId(productId),
+  ]);
+  const gate = checkPublishGate({
+    product: {
+      ingredients: product.ingredients,
+      safetyInfo: product.safetyInfo,
+    },
+    images,
+    variants,
+  });
+  if (!gate.ok) {
+    return {
+      formError: `Cannot publish yet — ${gate.failures.map((failure) => PUBLISH_GATE_MESSAGES[failure]).join(", ")}.`,
+    };
+  }
+
+  const updated = await updateProduct(productId, { status: "published" });
+  await createAuditLogEntry({
+    adminUserId: (await getCurrentAdminUserId()) ?? null,
+    action: "publish_product",
+    entityType: "product",
+    entityId: productId,
+    before: { status: product.status },
+    after: { status: updated?.status ?? "published" },
+  });
+
+  revalidatePath(PRODUCTS_PATH);
+  revalidatePath(editPagePath(productId));
+  redirect(editPagePath(productId));
+}
+
+export async function unpublishProductAction(
+  productId: string,
+  _prevState: MutationState,
+  formData: FormData,
+): Promise<MutationState> {
+  if (!(await csrfOk(formData))) {
+    return { formError: CSRF_FORM_ERROR };
+  }
+
+  const product = await getProductById(productId);
+  if (!product) {
+    return { formError: "Product not found." };
+  }
+
+  const updated = await updateProduct(productId, { status: "draft" });
+  await createAuditLogEntry({
+    adminUserId: (await getCurrentAdminUserId()) ?? null,
+    action: "unpublish_product",
+    entityType: "product",
+    entityId: productId,
+    before: { status: product.status },
+    after: { status: updated?.status ?? "draft" },
+  });
+
+  revalidatePath(PRODUCTS_PATH);
+  revalidatePath(editPagePath(productId));
+  redirect(editPagePath(productId));
+}
+
+export async function softDeleteProductAction(
+  productId: string,
+  _prevState: MutationState,
+  formData: FormData,
+): Promise<MutationState> {
+  if (!(await csrfOk(formData))) {
+    return { formError: CSRF_FORM_ERROR };
+  }
+
+  const product = await getProductById(productId);
+  if (!product) {
+    return { formError: "Product not found." };
+  }
+
+  const deleted = await softDeleteProduct(productId);
+  await createAuditLogEntry({
+    adminUserId: (await getCurrentAdminUserId()) ?? null,
+    action: "soft_delete_product",
+    entityType: "product",
+    entityId: productId,
+    before: { deletedAt: null },
+    after: { deletedAt: (deleted?.deletedAt ?? new Date()).toISOString() },
   });
 
   revalidatePath(PRODUCTS_PATH);

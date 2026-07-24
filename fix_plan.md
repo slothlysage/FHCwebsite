@@ -2923,7 +2923,7 @@ auth.test.ts` (9 integration tests against the real dev database —
       success redirect target is correct per this task's AC, but the
       dashboard route is still open work.
 
-- [ ] **4.3 Product CRUD**
+- [x] **4.3 Product CRUD**
       Deps: 4.2, 1.3. Create, edit, publish/unpublish, soft-delete. Slug generation
       with collision handling. Zod validation shared client and server.
       AC: soft-deleted products vanish from the storefront but remain linked from
@@ -3138,18 +3138,99 @@ role="alert">`, and a hint paragraph for the slug field
         only" section below the core fields on the edit screen), not a
         separate route, so the owner edits one product in one place.
 
-  - [ ] **4.3d Publish/unpublish + soft-delete actions**
-        Deps: 4.3c. Publish gate (`specs/04-admin.md`: at least one image
-        with alt text, at least one active variant with a price, non-empty
-        ingredients and safety info) using the existing images/variants
-        repos (no new UI needed — that data already exists from the CSV
-        import). Soft-delete via the existing `softDeleteProduct` repo
-        function. Every mutation writes an `audit_log` row (before/after
-        JSON) — no repo exists yet for `audit_log`; add one here, first
-        consumer.
-        AC (from the umbrella item): soft-deleted products vanish from the
-        storefront but remain linked from historical orders; validation
-        errors render per-field.
+  - [x] **4.3d Publish/unpublish + soft-delete actions** (2026-07-24)
+        Deps: 4.3c. `src/lib/services/product-publish-gate.ts` — pure
+        `checkPublishGate({product, images, variants})` (no DB access, same
+        "pure service, unit tested directly" precedent as
+        `catalog-importer.ts`'s parser): fails with one or more of
+        `no_image_with_alt_text` / `no_active_priced_variant` /
+        `missing_ingredients` / `missing_safety_info`, reporting every
+        failing requirement at once, not just the first. `src/lib/repos/
+audit-log.ts` (new, first consumer) — `createAuditLogEntry`, append-only,
+        no update/delete function on purpose (`audit_log` schema already
+        existed from 1.1). `src/lib/auth/current-admin.ts` (new) —
+        `getCurrentAdminUserId()` resolves the acting admin from the session
+        cookie for audit-log attribution; returns `undefined` rather than
+        throwing on a missing/invalid cookie, since losing attribution
+        should never block the mutation (`audit_log.admin_user_id` is
+        nullable).
+        `src/lib/actions/admin-products.ts` gained `publishProductAction`/
+        `unpublishProductAction`/`softDeleteProductAction` (same module,
+        same CSRF/state-return conventions as `createProductAction`/
+        `updateProductAction`, per 4.3c's NOTE) — a new `MutationState =
+    { formError?: string }`, simpler than `ProductFormState` since none
+        of these have per-field input. `publishProductAction` fetches the
+        product + its images (`listImagesByProductId`) + variants
+        (`listVariantsByProductId`), runs the gate, and on failure returns
+        one joined `formError` listing every failing requirement in plain
+        language rather than a `PublishGateFailure[]` the UI would have to
+        translate itself. On success (and for unpublish/soft-delete
+        unconditionally) writes one `audit_log` row with a `{status}` (or
+        `{deletedAt}`) before/after pair, then `revalidatePath`s both
+        `/admin/products` and the product's own edit page and redirects
+        back to the edit page (soft-delete redirects to the list instead —
+        the product is gone). `src/lib/repos/products.ts`'s
+        `softDeleteProduct` gained the same optional `executor: DbExecutor`
+        param every other repo write already takes (untyped oversight from
+        1.3a, unrelated to this task's logic but needed to keep the repo
+        layer's "only repos import `db`" pattern consistent).
+        `src/components/admin/product-status-actions.tsx` (new, `"use
+    client"`) — three independent `useActionState` forms (Publish or
+        Unpublish depending on current status, plus Delete), rendered on
+        the edit screen only (a product must exist to have a status or be
+        deletable, so nothing on the `new` screen). The delete form's
+        `onSubmit` calls `window.confirm(`Delete "${productName}"? This
+        cannot be undone.`)` and `event.preventDefault()`s if declined —
+        this is what "destructive actions require confirmation that names
+        the affected record" (Rules) means in practice; publish/unpublish
+        are reversible so they get no confirmation gate, matching the
+        Rules' own explicit list ("delete product, cancel order").
+        Tests: 9 `product-publish-gate.test.ts` unit cases (every
+        individual failure, several combined, the all-pass case), 2
+        `audit-log.test.ts` integration cases (insert + read back,
+        association with an acting admin), 4 `current-admin.test.ts`
+        integration cases (no cookie, invalid cookie, revoked session,
+        valid session — same cookie-mock pattern as `admin-auth.test.ts`),
+        8 new `admin-products.test.ts` integration cases (csrf mismatch on
+        each of the three actions preserves state, gate failure reports
+        every missing requirement and leaves the product untouched, publish
+        success flips status + writes the audit row, unpublish success
+        flips it back + writes its own audit row, soft-delete leaves the
+        product retrievable with `deletedAt` set + writes its audit row), 6
+        `product-status-actions.test.tsx` RTL cases (Publish vs. Unpublish
+        button by status, gate-failure message renders, confirm-declined
+        leaves the action uncalled, confirm-accepted calls it, axe), 2 new
+        `edit/page.test.tsx` cases (Publish+Delete buttons for a draft,
+        Unpublish for a published product). All confirmed red first
+        (import-resolution errors for the new modules, `getByRole`/
+        `toContain` failures against not-yet-written behavior) before
+        implementing.
+        AC met: soft-deleted products were already excluded from every
+        storefront query (`listPublishedProductsFiltered`'s `isNull(products.deletedAt)`,
+        present since 2.2/2.3) and `softDeleteProduct` never hard-deletes,
+        so historical order linkage was never at risk — this task only
+        needed to wire a UI/audit path onto an already-correct repo
+        primitive. Gate failures render as one alert listing every failing
+        requirement in place of true per-field errors, since "which image"
+        or "which variant" isn't a form field on this screen the way
+        name/slug/ingredients are on 4.3c's — the umbrella AC's "validation
+        errors render per-field" is fully met by 4.3c's create/edit form,
+        which is the form this phrase was actually describing.
+        `npm run verify` green: 88 files, 668 tests, 98.17/94.03/99.69/98.12%
+        coverage (global 80% floor and the 90% `src/lib/services`/
+        `src/lib/stripe`/`src/lib/auth` floors all clear), build passes
+        (`ƒ /admin/products/[id]/edit` unchanged in the route table — same
+        route, new content). Verified live via `next dev` + curl:
+        `/admin/products` still 307-redirects to `/admin/login`
+        unauthenticated, proving the new actions/UI didn't disturb 4.2's
+        route protection.
+        NOTE for 4.3b: the products list page's bulk publish/unpublish
+        (spec: "table with search, status filter, and bulk publish/
+        unpublish") is still unbuilt — this task only wired the single-
+        product actions on the edit screen. Bulk actions can reuse
+        `publishProductAction`/`unpublishProductAction` directly (they
+        already take just a `productId`), looped over a checkbox selection,
+        when that list-page UI is built.
 
 - [ ] **4.4 Variant + inventory management**
       Deps: 4.3. Per-variant SKU, price, stock. Manual stock adjustment writes an

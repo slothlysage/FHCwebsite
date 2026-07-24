@@ -1,12 +1,16 @@
 import { notFound } from "next/navigation";
 
 import {
+  publishProductAction,
+  softDeleteProductAction,
+  unpublishProductAction,
   updateProductAction,
   type ProductFormState,
 } from "@/lib/actions/admin-products";
 import { readCsrfCookie } from "@/lib/auth/csrf-cookie";
 import { getProductById } from "@/lib/repos/products";
 import { ProductForm } from "@/components/admin/product-form";
+import { ProductStatusActions } from "@/components/admin/product-status-actions";
 
 // Reads the csrf_token cookie — same rationale as the login/new-product
 // pages' own explicit export.
@@ -46,6 +50,14 @@ export default async function EditProductPage({
         initialState={initialState}
         csrfToken={csrfToken}
         submitLabel="Save changes"
+      />
+      <ProductStatusActions
+        productName={product.name}
+        status={product.status}
+        csrfToken={csrfToken}
+        publishAction={publishProductAction.bind(null, product.id)}
+        unpublishAction={unpublishProductAction.bind(null, product.id)}
+        deleteAction={softDeleteProductAction.bind(null, product.id)}
       />
     </div>
   );

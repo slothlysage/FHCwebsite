@@ -110,8 +110,9 @@ export async function updateProduct(
 
 export async function softDeleteProduct(
   id: string,
+  executor: DbExecutor = db,
 ): Promise<Product | undefined> {
-  const [deleted] = await db
+  const [deleted] = await executor
     .update(products)
     .set({ deletedAt: new Date(), updatedAt: new Date() })
     .where(eq(products.id, id))

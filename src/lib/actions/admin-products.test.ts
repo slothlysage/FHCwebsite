@@ -4,9 +4,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const csrfCookie = vi.hoisted(() => ({
   token: undefined as string | undefined,
 }));
+const sessionCookie = vi.hoisted(() => ({
+  token: undefined as string | undefined,
+}));
 
 vi.mock("@/lib/auth/csrf-cookie", () => ({
   readCsrfCookie: vi.fn(async () => csrfCookie.token),
+}));
+
+// getCurrentAdminUserId (4.3d) reads the session cookie via
+// session-cookie.ts's readAdminSessionToken, which itself needs
+// next/headers' request-scoped cookies() — same mock shape as
+// admin-auth.test.ts, kept minimal (only the one function these actions
+// call) since writeAdminSessionToken/clearAdminSessionToken aren't used
+// here.
+vi.mock("@/lib/auth/session-cookie", () => ({
+  readAdminSessionToken: vi.fn(async () => sessionCookie.token),
 }));
 
 // Same TestRedirect pattern as admin-auth.test.ts/cart.test.ts: redirect()'s
@@ -27,14 +40,25 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 import { CSRF_FIELD_NAME, generateCsrfToken } from "@/lib/auth/csrf-token";
 import { db } from "@/lib/db/client";
-import { products } from "@/lib/db/schema";
+import {
+  auditLog,
+  productImages,
+  productVariants,
+  products,
+} from "@/lib/db/schema";
+import { replaceProductImages } from "@/lib/repos/images";
 import { createProduct, getProductById } from "@/lib/repos/products";
+import { createVariant } from "@/lib/repos/variants";
 
 import { emptyProductFormValues } from "@/lib/validation/product-form";
 
 import {
   createProductAction,
+  publishProductAction,
+  softDeleteProductAction,
+  unpublishProductAction,
   updateProductAction,
+  type MutationState,
   type ProductFormState,
 } from "./admin-products";
 
@@ -62,6 +86,9 @@ describe("admin product actions", () => {
 
   afterEach(async () => {
     for (const id of insertedIds.splice(0)) {
+      await db.delete(auditLog).where(eq(auditLog.entityId, id));
+      await db.delete(productVariants).where(eq(productVariants.productId, id));
+      await db.delete(productImages).where(eq(productImages.productId, id));
       await db.delete(products).where(eq(products.id, id));
     }
   });
@@ -224,6 +251,190 @@ describe("admin product actions", () => {
       const updated = await getProductById(existing.id);
       expect(updated?.slug).toBe("test-update-action-steady-name");
       expect(updated?.careInfo).toBe("Keep away from heat.");
+    });
+  });
+
+  const initialMutationState: MutationState = {};
+
+  async function makePublishableProduct(slug: string) {
+    const product = await createProduct({
+      slug,
+      name: slug,
+      ingredients: "Shea butter, cocoa butter.",
+      safetyInfo: "Keep away from heat.",
+    });
+    insertedIds.push(product.id);
+    await createVariant({
+      productId: product.id,
+      sku: `${slug}-sku`,
+      name: "Default",
+      priceCents: 1999,
+      weightGrams: 100,
+      isActive: true,
+    });
+    await replaceProductImages(product.id, [
+      {
+        url: "https://example.com/img.jpg",
+        altText: "A product photo",
+        position: 0,
+        width: 800,
+        height: 600,
+      },
+    ]);
+    return product;
+  }
+
+  describe("publishProductAction", () => {
+    it("returns a form error and does not publish when the csrf field doesn't match the cookie", async () => {
+      const existing = await makePublishableProduct("test-publish-action-csrf");
+
+      const result = await publishProductAction(
+        existing.id,
+        initialMutationState,
+        formData({ [CSRF_FIELD_NAME]: "wrong-token" }),
+      );
+
+      expect(result.formError).toBeTruthy();
+      const unchanged = await getProductById(existing.id);
+      expect(unchanged?.status).toBe("draft");
+    });
+
+    it("blocks publish and reports every failing gate requirement when the product isn't ready", async () => {
+      const existing = await createProduct({
+        slug: "test-publish-action-gate-fail",
+        name: "Gate Fail",
+      });
+      insertedIds.push(existing.id);
+
+      const result = await publishProductAction(
+        existing.id,
+        initialMutationState,
+        formData({ [CSRF_FIELD_NAME]: csrfToken }),
+      );
+
+      expect(result.formError).toContain("image with alt text");
+      expect(result.formError).toContain("active variant with a price");
+      expect(result.formError).toContain("ingredients");
+      expect(result.formError).toContain("safety info");
+      const unchanged = await getProductById(existing.id);
+      expect(unchanged?.status).toBe("draft");
+    });
+
+    it("publishes the product and writes an audit log entry when the gate passes", async () => {
+      const existing = await makePublishableProduct(
+        "test-publish-action-success",
+      );
+
+      await expect(
+        publishProductAction(
+          existing.id,
+          initialMutationState,
+          formData({ [CSRF_FIELD_NAME]: csrfToken }),
+        ),
+      ).rejects.toThrow(`REDIRECT:/admin/products/${existing.id}/edit`);
+
+      const updated = await getProductById(existing.id);
+      expect(updated?.status).toBe("published");
+
+      const [entry] = await db
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.entityId, existing.id));
+      expect(entry?.action).toBe("publish_product");
+      expect(entry?.before).toEqual({ status: "draft" });
+      expect(entry?.after).toEqual({ status: "published" });
+    });
+  });
+
+  describe("unpublishProductAction", () => {
+    it("returns a form error and does not unpublish when the csrf field doesn't match the cookie", async () => {
+      const existing = await makePublishableProduct(
+        "test-unpublish-action-csrf",
+      );
+
+      const result = await unpublishProductAction(
+        existing.id,
+        initialMutationState,
+        formData({ [CSRF_FIELD_NAME]: "wrong-token" }),
+      );
+
+      expect(result.formError).toBeTruthy();
+    });
+
+    it("unpublishes a published product and writes an audit log entry", async () => {
+      const existing = await makePublishableProduct(
+        "test-unpublish-action-success",
+      );
+      await db
+        .update(products)
+        .set({ status: "published" })
+        .where(eq(products.id, existing.id));
+
+      await expect(
+        unpublishProductAction(
+          existing.id,
+          initialMutationState,
+          formData({ [CSRF_FIELD_NAME]: csrfToken }),
+        ),
+      ).rejects.toThrow(`REDIRECT:/admin/products/${existing.id}/edit`);
+
+      const updated = await getProductById(existing.id);
+      expect(updated?.status).toBe("draft");
+
+      const [entry] = await db
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.entityId, existing.id));
+      expect(entry?.action).toBe("unpublish_product");
+      expect(entry?.before).toEqual({ status: "published" });
+      expect(entry?.after).toEqual({ status: "draft" });
+    });
+  });
+
+  describe("softDeleteProductAction", () => {
+    it("returns a form error and does not delete when the csrf field doesn't match the cookie", async () => {
+      const existing = await createProduct({
+        slug: "test-delete-action-csrf",
+        name: "Delete Csrf",
+      });
+      insertedIds.push(existing.id);
+
+      const result = await softDeleteProductAction(
+        existing.id,
+        initialMutationState,
+        formData({ [CSRF_FIELD_NAME]: "wrong-token" }),
+      );
+
+      expect(result.formError).toBeTruthy();
+      const unchanged = await getProductById(existing.id);
+      expect(unchanged?.deletedAt).toBeNull();
+    });
+
+    it("soft-deletes the product, keeps it retrievable, and writes an audit log entry", async () => {
+      const existing = await createProduct({
+        slug: "test-delete-action-success",
+        name: "Delete Success",
+      });
+      insertedIds.push(existing.id);
+
+      await expect(
+        softDeleteProductAction(
+          existing.id,
+          initialMutationState,
+          formData({ [CSRF_FIELD_NAME]: csrfToken }),
+        ),
+      ).rejects.toThrow("REDIRECT:/admin/products");
+
+      const deleted = await getProductById(existing.id);
+      expect(deleted?.deletedAt).toBeInstanceOf(Date);
+
+      const [entry] = await db
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.entityId, existing.id));
+      expect(entry?.action).toBe("soft_delete_product");
+      expect(entry?.before).toEqual({ deletedAt: null });
+      expect(typeof entry?.after).toBe("object");
     });
   });
 });
