@@ -1672,10 +1672,68 @@ allow_backorder` rule — a backorder-enabled variant has no real
         action has a pending state" rule isn't fully met by a bare submit
         button.
 
-- [ ] **2.8 Content pages**
+- [ ] **2.8 Content pages** — partially done 2026-07-24: FAQ, shipping,
+      returns, privacy, terms shipped; about and contact deliberately held
+      back (owner's call, brand-story/contact copy comes later). AC not yet
+      fully met — `/about` and `/contact` still 404 — so this stays open.
       Deps: 2.1. About, contact, FAQ, shipping, returns, privacy, terms.
       AC: all footer links resolve; no lorem ipsum ships.
       🚦 HUMAN GATE — policy copy must be written/approved by the owner.
+      **Partially resolved 2026-07-24**: owner supplied a raw Terms of
+      Service + shipping/returns policy doc (scraped from a prior Shopify
+      store). Terms/Shipping/Returns/FAQ are built from that real,
+      owner-provided text — cleaned up, de-duplicated (the source had two
+      overlapping drafts pasted back to back), and de-Shopified (removed
+      "This website is operated by Shopify" boilerplate, the Shop-channel
+      Messaging Terms paragraph tied to a different store's Shopify
+      instance, and the leftover "Company Newsletter" footer blurb — no
+      newsletter feature exists in this codebase). FAQ is not owner-authored
+      prose; it's the same shipping/returns facts restructured as Q&A, per
+      specs/07-security-legal.md's "must not invent legal text" rule (no new
+      claims, only reformatting what the owner already supplied).
+      **Privacy Policy has no owner-authored source** (unlike the other
+      three) — owner explicitly chose (2026-07-24) to have it drafted from
+      already-documented, real system behavior rather than block the page
+      entirely: specs/07-security-legal.md's Privacy bullets (minimum data
+      collection, no stored passwords/guest-checkout-only, cookieless
+      analytics commitment) plus the actual implementation (Stripe Checkout
+      for payments, the single httpOnly `cart_id` cart cookie, Resend for
+      order-receipt email only — no analytics or marketing-email feature
+      exists yet, so the page doesn't claim one). This is a first draft, not
+      legal advice — same "confirm before launch" status as the shipping
+      rates/tax-origin-address items elsewhere in this file. Owner/legal
+      should review before this is treated as final.
+      **Support email**: all four pages need a real contact address (the
+      source doc had four "(insert email)" placeholders). Owner decided
+      (2026-07-24) to reuse `ADMIN_EMAIL` from `.env.local` for now, and
+      asked that this be logged as a build spec for 4.x's Settings page
+      (`specs/04-admin.md`'s Settings section already lists "store contact
+      details" as a future field, just not built yet): **once Settings ships
+      a store contact/notification email field, `getSupportEmail()`
+      (`src/lib/support-contact.ts`) should prefer that value and fall back
+      to `ADMIN_EMAIL` only if unset** — same resolution order
+      `specs/04-admin.md`'s "Owner notifications" section already uses for
+      the same env var, not a new pattern. `SupportEmailLink`
+      (`src/components/support-email-link.tsx`) is the one place that reads
+      it, so this is a one-function change when Settings exists, not a
+      copy/replace across four pages.
+      Owner also decided (2026-07-24) not to publish the PO Box business
+      address on any public page yet — it stays internal to Shippo
+      label-purchasing (4.7a) only.
+      New routes: `src/app/(storefront)/{faq,shipping,returns,privacy,terms}
+/page.tsx`, all plain static Server Components (no DB) matching the route
+      table in `specs/03-storefront.md`. Tests: one `page.test.tsx` per
+      route (render + jest-axe, matching `site-footer.test.tsx`'s existing
+      pattern) plus new tests for `support-contact.ts` and
+      `support-email-link.tsx`'s email-configured/unconfigured branches.
+      `npm run verify` green: 73 files, 557 tests,
+      98.12/93.95/99.65/98.07% coverage.
+      Verified live via `next dev` + curl: `/faq /shipping /returns /privacy
+    /terms` all return 200 with the real content (checked for zero
+      remaining "Shopify"/"insert email"/"lorem ipsum" strings); `/about`
+      and `/contact` correctly still 404, same as an arbitrary unknown path
+      — confirming the footer's links to those two are still open, not
+      silently broken.
 
 - [x] **2.9 Home page**
       Deps: 2.2. Discovered during the 2026-07-22 repo sweep:
@@ -3053,7 +3111,11 @@ _(agent appends here; do not guess around a blocker)_
   expand it, not changed here.
 - Product photography still needed before 5.4 (Lighthouse/LCP image) makes
   it load-bearing; OG images are otherwise done (mark + palette).
-- Policy copy: shipping, returns, privacy, terms — needed for 2.8.
+- ~~Policy copy: shipping, returns, privacy, terms — needed for 2.8.~~
+  RESOLVED 2026-07-24: owner supplied a raw Terms/shipping/returns doc;
+  shipping/returns/terms/FAQ built from it, privacy drafted from documented
+  system facts pending legal review. See 2.8's own entry for detail. About
+  and contact copy is still open — not part of this resolution.
 - Brand-story narrative copy ("About the maker" paragraph) for the home
   page — `specs/03-storefront.md`'s route table calls for it alongside
   featured products, but 2.9's own AC never required it and was closed
