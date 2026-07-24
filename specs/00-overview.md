@@ -17,26 +17,28 @@ PCI scope, and not losing orders.
 
 Explicitly out of scope. Do not build these:
 
-- Customer accounts and login (guest checkout, guest bookings, and
-  Stripe-hosted subscription management only — see `specs/05b-billing-and-bookings.md`)
+- Customer accounts and login (guest checkout only)
 - Multi-currency
 - Reviews, wishlists, loyalty points
 - Blog / CMS
 - Multi-admin roles and permissions (one admin account)
 - Abandoned-cart recovery
-- In-house appointment scheduling/calendar (bookings sell a fixed-price slot
-  via Checkout; the owner arranges the actual time by email — see
-  `specs/05b-billing-and-bookings.md`)
+- In-house appointment scheduling/calendar
+- Subscriptions or recurring billing, and paid bookings (box subscriptions,
+  service bookings — a complete deferred design exists at
+  `specs/05b-billing-and-bookings.md` for whenever this is picked up post-v1)
 
 Each is a reasonable v2. Adding any of them in v1 is scope creep and should be
 rejected by the agent.
 
-**Amended 2026-07-22:** "Subscriptions or recurring billing" is no longer a
-non-goal — membership tiers are in scope for v1, added via Stripe Billing.
-See `specs/05b-billing-and-bookings.md` for the model. This does not reopen
-"customer accounts and login": subscription self-service (upgrade/downgrade/
-cancel/payment method) is handled entirely by Stripe's hosted Customer
-Portal, reached by an emailed link, not a site login system.
+**Amended 2026-07-22, reverted 2026-07-23:** subscriptions/recurring billing
+and paid bookings were briefly pulled into v1 scope on 2026-07-22 (see
+`specs/05b-billing-and-bookings.md`). The owner called this scope creep on
+reflection — same judgment the original non-goals list already made for
+appointment scheduling and customer accounts — and asked for it to be pushed
+back out to v2. `fix_plan.md`'s former "Phase 3b" is now the "Subscription
+boxes and bookings" entry under "Post-v1 backlog"; do not resume that work
+until v1 (Phases 0-6) has shipped and the owner explicitly re-greenlights it.
 
 ## Success criteria
 

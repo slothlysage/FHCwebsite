@@ -1,7 +1,19 @@
 # 05b — Subscription boxes and bookings
 
+**Status: deferred to post-v1 (reverted 2026-07-23).** This spec briefly
+amended `specs/00-overview.md`'s non-goals on 2026-07-22 to bring
+subscriptions/bookings into v1 scope. The owner called that scope creep on
+reflection and asked for it to be pushed back to v2 — `specs/00-overview.md`
+now lists subscriptions/recurring billing and paid bookings as non-goals
+again, and `fix_plan.md`'s task breakdown lives under "Post-v1 backlog"
+(renumbered `pv1.1`-`pv1.8`, formerly "Phase 3b") rather than in the active
+v1 sequence. This document is kept as-is, not deleted — it's a complete,
+ready-to-build design for whenever the owner re-greenlights this work. Do not
+implement anything below until v1 (Phases 0-6 of `fix_plan.md`) has shipped.
+
 Added 2026-07-22, amending `specs/00-overview.md`'s non-goals — see that
-file's "Amended" note. Revised the same day after clarifying what
+file's "Amended" note (now itself superseded by the revert above). Revised
+the same day after clarifying what
 "subscriptions" actually means for this business: **recurring shipments of a
 box of physical products** (e.g. "Monthly Candle Box"), not an abstract
 access-tier membership. That distinction matters architecturally — a box
