@@ -2,13 +2,20 @@ import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { db } from "@/lib/db/client";
-import { cartItems, carts, productVariants, products } from "@/lib/db/schema";
+import {
+  cartItems,
+  carts,
+  discountCodes,
+  productVariants,
+  products,
+} from "@/lib/db/schema";
 import {
   createCart,
   deleteCartItemsByCartId,
   getCartById,
   listCartItemsByCartId,
   removeCartItem,
+  setCartDiscountCode,
   upsertCartItem,
 } from "@/lib/repos/cart";
 import { createProduct } from "@/lib/repos/products";
@@ -209,5 +216,22 @@ describe("cart repo", () => {
     insertedCartIds.push(cart.id);
 
     await expect(deleteCartItemsByCartId(cart.id)).resolves.not.toThrow();
+  });
+
+  it("sets and clears a cart's applied discount code", async () => {
+    const cart = await createCart();
+    insertedCartIds.push(cart.id);
+    const [code] = await db
+      .insert(discountCodes)
+      .values({ code: "REPOTEST10", kind: "percent", value: 10 })
+      .returning();
+
+    const withCode = await setCartDiscountCode(cart.id, code!.id);
+    expect(withCode.discountCodeId).toBe(code!.id);
+
+    const cleared = await setCartDiscountCode(cart.id, null);
+    expect(cleared.discountCodeId).toBeNull();
+
+    await db.delete(discountCodes).where(eq(discountCodes.id, code!.id));
   });
 });

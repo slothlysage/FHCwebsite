@@ -19,6 +19,18 @@ export async function getDiscountCodeByCode(
   return row;
 }
 
+// Used to re-validate a cart's already-applied discount code (task 3.8b),
+// where the cart only stores the id, not the code string.
+export async function getDiscountCodeById(
+  id: string,
+): Promise<DiscountCode | undefined> {
+  const [row] = await db
+    .select()
+    .from(discountCodes)
+    .where(eq(discountCodes.id, id));
+  return row;
+}
+
 // Atomic `times_used + 1` (not read-then-write) so concurrent redemptions of
 // the same code can't lose an increment.
 export async function incrementDiscountCodeUsage(

@@ -27,6 +27,13 @@ export const removeCartItemFormSchema = z.object({
   variantId: variantIdSchema,
 });
 
+// No `.catch()` fallback here, unlike quantity above — an empty/missing code
+// has no sensible default to silently apply, so a malformed submission is
+// reported to the caller as a failed parse instead.
+export const applyDiscountCodeFormSchema = z.object({
+  code: z.string().trim().min(1),
+});
+
 export function parseAddToCartForm(formData: FormData) {
   return addToCartFormSchema.safeParse({
     variantId: formData.get("variantId"),
@@ -44,5 +51,11 @@ export function parseUpdateCartItemForm(formData: FormData) {
 export function parseRemoveCartItemForm(formData: FormData) {
   return removeCartItemFormSchema.safeParse({
     variantId: formData.get("variantId"),
+  });
+}
+
+export function parseApplyDiscountCodeForm(formData: FormData) {
+  return applyDiscountCodeFormSchema.safeParse({
+    code: formData.get("code"),
   });
 }

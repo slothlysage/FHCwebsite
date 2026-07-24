@@ -14,11 +14,16 @@ import { db } from "@/lib/db/client";
 import {
   cartItems,
   carts,
+  discountCodes,
   inventoryMovements,
   productVariants,
   products,
 } from "@/lib/db/schema";
-import { createCart, upsertCartItem } from "@/lib/repos/cart";
+import {
+  createCart,
+  setCartDiscountCode,
+  upsertCartItem,
+} from "@/lib/repos/cart";
 import { recordMovement } from "@/lib/repos/inventory";
 import { createProduct } from "@/lib/repos/products";
 import { createVariant, deactivateVariant } from "@/lib/repos/variants";
@@ -36,10 +41,13 @@ import CartPage from "./page";
 // instance makes no network call (specs/05-payments.md's "Implementation
 // notes (3.1)"), so this file needs no msw setup unlike checkout.test.ts.
 
-async function renderCart(checkoutError?: string) {
+async function renderCart(checkoutError?: string, discountError?: string) {
   return render(
     await CartPage({
-      searchParams: Promise.resolve({ checkout_error: checkoutError }),
+      searchParams: Promise.resolve({
+        checkout_error: checkoutError,
+        discount_error: discountError,
+      }),
     }),
   );
 }
@@ -48,12 +56,16 @@ describe("CartPage", () => {
   const insertedProductIds: string[] = [];
   const insertedCartIds: string[] = [];
   const insertedVariantIds: string[] = [];
+  const insertedDiscountCodeIds: string[] = [];
 
   afterEach(async () => {
     cartCookie.cartId = undefined;
     for (const cartId of insertedCartIds.splice(0)) {
       await db.delete(cartItems).where(eq(cartItems.cartId, cartId));
       await db.delete(carts).where(eq(carts.id, cartId));
+    }
+    for (const id of insertedDiscountCodeIds.splice(0)) {
+      await db.delete(discountCodes).where(eq(discountCodes.id, id));
     }
     const variantIds = insertedVariantIds.splice(0);
     if (variantIds.length > 0) {
@@ -283,5 +295,129 @@ describe("CartPage", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       /aren't available for checkout right now/i,
     );
+  });
+
+  it("shows a discount-code form when the cart has items and no code applied", async () => {
+    const product = await createProduct({
+      slug: "test-cart-page-discount-form",
+      name: "Discount Form Candle",
+      status: "published",
+    });
+    insertedProductIds.push(product.id);
+    const variant = await createVariant({
+      productId: product.id,
+      sku: "TEST-CART-PAGE-DISCOUNT-FORM",
+      name: "8oz",
+      priceCents: 1000,
+      weightGrams: 200,
+    });
+    insertedVariantIds.push(variant.id);
+    const cart = await createCart();
+    insertedCartIds.push(cart.id);
+    await upsertCartItem({
+      cartId: cart.id,
+      variantId: variant.id,
+      quantity: 1,
+    });
+    cartCookie.cartId = cart.id;
+
+    await renderCart();
+
+    expect(screen.getByLabelText(/discount code/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /apply/i })).toBeInTheDocument();
+  });
+
+  it("shows an applied discount code, the discount amount, and the total", async () => {
+    const product = await createProduct({
+      slug: "test-cart-page-discount-applied",
+      name: "Discount Applied Candle",
+      status: "published",
+    });
+    insertedProductIds.push(product.id);
+    const variant = await createVariant({
+      productId: product.id,
+      sku: "TEST-CART-PAGE-DISCOUNT-APPLIED",
+      name: "8oz",
+      priceCents: 1000,
+      weightGrams: 200,
+    });
+    insertedVariantIds.push(variant.id);
+    const cart = await createCart();
+    insertedCartIds.push(cart.id);
+    await upsertCartItem({
+      cartId: cart.id,
+      variantId: variant.id,
+      quantity: 2,
+    });
+    const [code] = await db
+      .insert(discountCodes)
+      .values({ code: "PAGE10", kind: "percent", value: 10 })
+      .returning();
+    insertedDiscountCodeIds.push(code!.id);
+    await setCartDiscountCode(cart.id, code!.id);
+    cartCookie.cartId = cart.id;
+
+    await renderCart();
+
+    expect(screen.getByText(/PAGE10/i)).toBeInTheDocument();
+    expect(screen.getByText("-$2.00")).toBeInTheDocument(); // 10% of $20.00
+    expect(
+      within(screen.getByText("Total").closest("div")!).getByText("$18.00"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /remove discount code/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a discount_error banner when redirected back from a rejected code", async () => {
+    await renderCart(undefined, "exhausted");
+
+    const alerts = screen.getAllByRole("alert");
+    expect(
+      alerts.some((el) => /no longer available/i.test(el.textContent ?? "")),
+    ).toBe(true);
+  });
+
+  it("reports and clears a discount code that's become invalid since it was applied", async () => {
+    const product = await createProduct({
+      slug: "test-cart-page-discount-stale",
+      name: "Discount Stale Candle",
+      status: "published",
+    });
+    insertedProductIds.push(product.id);
+    const variant = await createVariant({
+      productId: product.id,
+      sku: "TEST-CART-PAGE-DISCOUNT-STALE",
+      name: "8oz",
+      priceCents: 1000,
+      weightGrams: 200,
+    });
+    insertedVariantIds.push(variant.id);
+    const cart = await createCart();
+    insertedCartIds.push(cart.id);
+    await upsertCartItem({
+      cartId: cart.id,
+      variantId: variant.id,
+      quantity: 1,
+    });
+    const [code] = await db
+      .insert(discountCodes)
+      .values({
+        code: "STALECODE",
+        kind: "fixed",
+        value: 100,
+        isActive: false,
+      })
+      .returning();
+    insertedDiscountCodeIds.push(code!.id);
+    await setCartDiscountCode(cart.id, code!.id);
+    cartCookie.cartId = cart.id;
+
+    await renderCart();
+
+    expect(
+      screen.getByText(/discount code stalecode is no longer valid/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/remove discount code/i)).not.toBeInTheDocument();
   });
 });

@@ -702,4 +702,62 @@ the same code. The actual guarantee comes from `incrementDiscountCodeUsage`
 exactly once per paid order, from inside `order-fulfillment.ts`'s existing
 transaction, gated by the same `webhook_events` idempotency row 3.4/3.5
 already use to guarantee "replaying the same event twice creates exactly one
-order." 3.8b must call it there, not re-derive a new lock.
+order." 3.8c must call it there, not re-derive a new lock.
+
+## Implementation notes (3.8b)
+
+**Cart-side apply/remove only — no Stripe/webhook wiring yet.** `carts`
+gained one nullable column, `discount_code_id` (FK to `discount_codes.id`,
+migration `0004_warm_colossus.sql`). The cart stores _which code the
+customer typed in_, never a discount amount — there's no `discount_cents`
+column on `carts` to keep in sync, matching the same "re-derive, don't
+cache" posture the schema already takes toward cart line prices.
+
+**`getCartSummary` re-validates the stored code on every read**, exactly
+like it already re-validates stock/price for lines. A private
+`resolveDiscount(cartId, discountCodeId, subtotalCents)` re-runs 3.8a's
+`validateDiscountCode` every time; if the code has gone invalid since it was
+applied (expired, exhausted by a different checkout, or the cart's own
+subtotal dropped below min-spend after a line was removed), it's cleared via
+`setCartDiscountCode(cartId, null)` and reported through a new
+`CartAdjustment` variant, `discount_removed`, the same way a dropped/clamped
+line is reported — never silently kept stale.
+
+**One subtotal computation, not two.** `applyDiscountCode(cartId, code)`
+needs the cart's current subtotal to validate against, but it must be the
+_real_ subtotal — after re-pricing and re-clamping every line — not a raw
+sum over `cart_items.quantity`. The line/subtotal half of `getCartSummary`
+was factored out into a private `computeLinesAndSubtotal(cartId)` so both
+callers share one code path; a second, hand-rolled subtotal loop here would
+have silently diverged the moment a line needed clamping.
+
+**`CartSummary` grew three fields:** `discountCents`, `totalCents`
+(`subtotalCents - discountCents`, never negative since `validateDiscountCode`
+already clamps `discountCents` to `[0, subtotalCents]`), and
+`appliedDiscountCode: {id, code} | null`. `discount.ts` exports a new
+`DiscountRejectReason` type alias (`Extract<DiscountValidationResult,
+{ok:false}>["reason"]`) so `cart.ts`'s `discount_removed` adjustment and
+`applyDiscountCode`'s rejection result don't each hand-duplicate that
+literal union.
+
+**Bad-code UX mirrors 3.3's checkout-error pattern.**
+`applyDiscountCodeAction` redirects to `/cart?discount_error=<reason>` on
+rejection — a nonexistent/expired/exhausted code is a real, user-facing
+outcome, not a malformed-request case to silently no-op like a bad
+`variantId` elsewhere in this action file. The cart page maps every
+`DiscountRejectReason`, plus the action's own `"invalid_code"` sentinel for
+a blank/missing form field, to copy via a `DISCOUNT_ERROR_MESSAGES` lookup.
+
+**A flaky-test trap for the next person touching `getCartSummary`.**
+Running its two independent reads (`getCartById`, `computeLinesAndSubtotal`)
+via `Promise.all` — the obvious "parallelize independent work" move — made
+`order-fulfillment.test.ts`'s pre-existing 3.6 concurrent-oversell test
+intermittently fail (one of two concurrently-fulfilled orders silently never
+created, ~30-40% of runs when preceded by another test in the same file).
+Confirmed via a standalone `tsx` repro outside vitest that the oversell
+guard logic itself is correct (30/30 clean) — this is a
+pg.Pool-connection-contention artifact specific to running under vitest,
+triggered by `getCartSummary` briefly holding one more concurrent
+connection than before. Fixed by making the two reads sequential; do not
+"optimize" this back to `Promise.all` without re-running that test file
+many times first.

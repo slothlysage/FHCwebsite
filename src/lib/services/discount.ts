@@ -18,6 +18,13 @@ export type DiscountValidationResult =
         | "min_spend_not_met";
     };
 
+// Just the reason-string half of the union, for callers (cart.ts's
+// "discount_removed" adjustment) that only ever see the rejection branch.
+export type DiscountRejectReason = Extract<
+  DiscountValidationResult,
+  { ok: false }
+>["reason"];
+
 export async function validateDiscountCode(
   code: string,
   subtotalCents: number,

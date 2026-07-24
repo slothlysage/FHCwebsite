@@ -5,6 +5,7 @@ import { db } from "@/lib/db/client";
 import {
   cartItems,
   carts,
+  discountCodes,
   inventoryMovements,
   productVariants,
   products,
@@ -15,7 +16,9 @@ import { createProduct, updateProduct } from "@/lib/repos/products";
 import { createVariant, updateVariant } from "@/lib/repos/variants";
 import {
   addToCart,
+  applyDiscountCode,
   getCartSummary,
+  removeDiscountCode,
   removeFromCart,
   updateCartItemQuantity,
 } from "@/lib/services/cart";
@@ -27,6 +30,7 @@ describe("cart service", () => {
   const insertedProductIds: string[] = [];
   const insertedCartIds: string[] = [];
   const insertedVariantIds: string[] = [];
+  const insertedDiscountCodeIds: string[] = [];
 
   afterEach(async () => {
     for (const cartId of insertedCartIds.splice(0)) {
@@ -45,7 +49,21 @@ describe("cart service", () => {
         .where(eq(productVariants.productId, productId));
       await db.delete(products).where(eq(products.id, productId));
     }
+    for (const id of insertedDiscountCodeIds.splice(0)) {
+      await db.delete(discountCodes).where(eq(discountCodes.id, id));
+    }
   });
+
+  async function insertDiscountCode(
+    overrides: Partial<typeof discountCodes.$inferInsert>,
+  ) {
+    const [created] = await db
+      .insert(discountCodes)
+      .values({ code: "CARTSVC10", kind: "percent", value: 10, ...overrides })
+      .returning();
+    insertedDiscountCodeIds.push(created!.id);
+    return created!;
+  }
 
   async function makeCart() {
     const cart = await createCart();
@@ -102,6 +120,9 @@ describe("cart service", () => {
         cartId: cart.id,
         lines: [],
         subtotalCents: 0,
+        discountCents: 0,
+        totalCents: 0,
+        appliedDiscountCode: null,
         adjustments: [],
       });
     });
@@ -449,6 +470,157 @@ describe("cart service", () => {
       const result = await updateCartItemQuantity(cart.id, variant.id, 2);
 
       expect(result).toEqual({ ok: false, reason: "unavailable" });
+    });
+  });
+
+  describe("discount codes", () => {
+    it("applies a valid code and reflects it in the next summary read", async () => {
+      const cart = await makeCart();
+      const { variant } = await makeVariant(
+        "test-cart-svc-discount-apply",
+        "TEST-CART-SVC-DISCOUNT-APPLY",
+        { priceCents: 1000, stock: 5 },
+      );
+      await addToCart(cart.id, variant.id, 2); // subtotal 2000
+      const code = await insertDiscountCode({
+        code: "APPLYME",
+        kind: "percent",
+        value: 10,
+      });
+
+      const result = await applyDiscountCode(cart.id, "APPLYME");
+      expect(result).toEqual({ ok: true, discountCents: 200 });
+
+      const summary = await getCartSummary(cart.id);
+      expect(summary.discountCents).toBe(200);
+      expect(summary.totalCents).toBe(1800);
+      expect(summary.appliedDiscountCode).toEqual({
+        id: code.id,
+        code: "APPLYME",
+      });
+      expect(summary.adjustments).toEqual([]);
+    });
+
+    it("rejects an unknown code and leaves the cart without a discount", async () => {
+      const cart = await makeCart();
+      const { variant } = await makeVariant(
+        "test-cart-svc-discount-unknown",
+        "TEST-CART-SVC-DISCOUNT-UNKNOWN",
+        { priceCents: 1000, stock: 5 },
+      );
+      await addToCart(cart.id, variant.id, 1);
+
+      const result = await applyDiscountCode(cart.id, "NOPE");
+
+      expect(result).toEqual({ ok: false, reason: "not_found" });
+      const summary = await getCartSummary(cart.id);
+      expect(summary.discountCents).toBe(0);
+      expect(summary.appliedDiscountCode).toBeNull();
+    });
+
+    it("rejects a code below its minimum spend without applying it", async () => {
+      const cart = await makeCart();
+      const { variant } = await makeVariant(
+        "test-cart-svc-discount-minspend",
+        "TEST-CART-SVC-DISCOUNT-MINSPEND",
+        { priceCents: 500, stock: 5 },
+      );
+      await addToCart(cart.id, variant.id, 1); // subtotal 500
+      await insertDiscountCode({
+        code: "BIGSPEND",
+        kind: "fixed",
+        value: 100,
+        minSpendCents: 5000,
+      });
+
+      const result = await applyDiscountCode(cart.id, "BIGSPEND");
+
+      expect(result).toEqual({ ok: false, reason: "min_spend_not_met" });
+      const summary = await getCartSummary(cart.id);
+      expect(summary.appliedDiscountCode).toBeNull();
+    });
+
+    it("applying a second valid code replaces the first", async () => {
+      const cart = await makeCart();
+      const { variant } = await makeVariant(
+        "test-cart-svc-discount-replace",
+        "TEST-CART-SVC-DISCOUNT-REPLACE",
+        { priceCents: 1000, stock: 5 },
+      );
+      await addToCart(cart.id, variant.id, 1);
+      await insertDiscountCode({ code: "FIRST", kind: "fixed", value: 100 });
+      const second = await insertDiscountCode({
+        code: "SECOND",
+        kind: "fixed",
+        value: 200,
+      });
+
+      await applyDiscountCode(cart.id, "FIRST");
+      await applyDiscountCode(cart.id, "SECOND");
+
+      const summary = await getCartSummary(cart.id);
+      expect(summary.appliedDiscountCode).toEqual({
+        id: second.id,
+        code: "SECOND",
+      });
+      expect(summary.discountCents).toBe(200);
+    });
+
+    it("removes an applied discount code", async () => {
+      const cart = await makeCart();
+      const { variant } = await makeVariant(
+        "test-cart-svc-discount-remove",
+        "TEST-CART-SVC-DISCOUNT-REMOVE",
+        { priceCents: 1000, stock: 5 },
+      );
+      await addToCart(cart.id, variant.id, 1);
+      await insertDiscountCode({ code: "GONE", kind: "fixed", value: 100 });
+      await applyDiscountCode(cart.id, "GONE");
+
+      await removeDiscountCode(cart.id);
+
+      const summary = await getCartSummary(cart.id);
+      expect(summary.appliedDiscountCode).toBeNull();
+      expect(summary.discountCents).toBe(0);
+    });
+
+    it("auto-clears an applied code that's since become exhausted, and reports it", async () => {
+      const cart = await makeCart();
+      const { variant } = await makeVariant(
+        "test-cart-svc-discount-exhausted",
+        "TEST-CART-SVC-DISCOUNT-EXHAUSTED",
+        { priceCents: 1000, stock: 5 },
+      );
+      await addToCart(cart.id, variant.id, 1);
+      const code = await insertDiscountCode({
+        code: "USEDUP",
+        kind: "fixed",
+        value: 100,
+        maxUses: 1,
+      });
+      await applyDiscountCode(cart.id, "USEDUP");
+      // Simulate the code being exhausted by another checkout in the
+      // meantime, without going through this cart's own redemption path.
+      await db
+        .update(discountCodes)
+        .set({ timesUsed: 1 })
+        .where(eq(discountCodes.id, code.id));
+
+      const summary = await getCartSummary(cart.id);
+
+      expect(summary.appliedDiscountCode).toBeNull();
+      expect(summary.discountCents).toBe(0);
+      expect(summary.adjustments).toEqual([
+        expect.objectContaining({
+          type: "discount_removed",
+          code: "USEDUP",
+          reason: "exhausted",
+        }),
+      ]);
+
+      // The clear is persisted, not just reported for this one read.
+      const again = await getCartSummary(cart.id);
+      expect(again.adjustments).toEqual([]);
     });
   });
 

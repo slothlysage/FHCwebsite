@@ -2314,7 +2314,7 @@ https://api.resend.com/emails`, mirroring `stripe-server.ts`'s pattern
       Split into sub-tasks below (validation logic is pure/DB-read-only and
       independently testable from the cart/Checkout/webhook wiring side, same
       rationale as 1.3's and 1.4's splits). This umbrella item is ticked `[x]`
-      only once both below are `[x]`.
+      only once all three below are `[x]`.
 
   - [x] **3.8a Discount code validation service**
         Deps: 3.3. `src/lib/repos/discount-codes.ts` — `getDiscountCodeByCode`
@@ -2322,57 +2322,160 @@ https://api.resend.com/emails`, mirroring `stripe-server.ts`'s pattern
         the existing `discount_codes_code_lower_idx` shape rather than trusting
         caller-normalized input) and `incrementDiscountCodeUsage` (atomic SQL
         `times_used + 1` via a `set({ timesUsed: sql\`... + 1\` })`, not a
-    read-then-write, so concurrent redemptions can't lose an increment —
-    takes the existing `DbExecutor`/`db`default pattern from
-   `inventory.ts`/`orders.ts`so 3.8b can call it inside the
-    fulfillment transaction).
-   `src/lib/services/discount.ts`—`validateDiscountCode(code,
+read-then-write, so concurrent redemptions can't lose an increment —
+takes the existing `DbExecutor`/`db`default pattern from
+ `inventory.ts`/`orders.ts`so 3.8b can call it inside the
+fulfillment transaction).
+ `src/lib/services/discount.ts`—`validateDiscountCode(code,
         subtotalCents)`returns`{ok:true, discountCodeId, discountCents}`or
-   `{ok:false, reason}`with reasons`not_found | inactive |
+ `{ok:false, reason}`with reasons`not_found | inactive |
         not_started | expired | exhausted | min_spend_not_met`.
-    `discountCents`: percent is `Math.round(subtotal * value / 100)`,
-    fixed is `value`— both then clamped`[0, subtotalCents]`so a
-    misconfigured or oversized fixed code can never make a line go
-    negative or exceed the cart (AGENT.md's "Money" floor). Pure
-    decision logic over one repo read; does not touch a cart or order —
-    no UI/checkout wiring yet, that's 3.8b.
-    Tests:`discount-codes.test.ts`(4 integration cases — exact match,
-    case-insensitive match, not-found, atomic increment) and
-   `discount.test.ts`(11 integration cases — percent rounding, fixed,
-    fixed-capped-at-subtotal, case-insensitive, and one case per reject
-    reason including the min-spend boundary exactly at the threshold).
-    Confirmed both files red first (import-resolution error, neither
-    module existed) before implementing.
-    AC met: 100% coverage on both new files (not flagged in`verify`'s
-    uncovered-lines report at all); full `npm run verify`green — 54
-    files, 441 tests, 98/93.81/100/97.94% coverage (global 80% floor and
-   `src/lib/services/**`/`src/lib/repos/**`90% floor both clear),
-    build passes.
-    NOTE for 3.8b:`maxUses`/`minSpendCents`/`startsAt`/`endsAt`are all
-    nullable in the schema and treated as "no limit" when null — a code
-    row created with everything but`code`/`kind`/`value`blank is a
-    perpetual, uncapped, no-minimum discount by construction, not a
-    special case this function branches on.
-    NOTE for 3.8b: this function's`exhausted`/`min_spend_not_met`     checks are read-time only and therefore racy against a second
-    concurrent checkout — safe for the cart-side "tell the user now"
-    UX, but not sufficient on their own for "a code cannot be applied
-    twice" once real money is on the line. That AC needs
-    `incrementDiscountCodeUsage`(already atomic) called from inside
-   `order-fulfillment.ts`'s existing transaction, gated by the same
-    `webhook_events` idempotency row 3.4/3.5 already rely on — not a new
+`discountCents`: percent is `Math.round(subtotal * value / 100)`,
+fixed is `value`— both then clamped`[0, subtotalCents]`so a
+misconfigured or oversized fixed code can never make a line go
+negative or exceed the cart (AGENT.md's "Money" floor). Pure
+decision logic over one repo read; does not touch a cart or order —
+no UI/checkout wiring yet, that's 3.8b.
+Tests:`discount-codes.test.ts`(4 integration cases — exact match,
+case-insensitive match, not-found, atomic increment) and
+ `discount.test.ts`(11 integration cases — percent rounding, fixed,
+fixed-capped-at-subtotal, case-insensitive, and one case per reject
+reason including the min-spend boundary exactly at the threshold).
+Confirmed both files red first (import-resolution error, neither
+module existed) before implementing.
+AC met: 100% coverage on both new files (not flagged in`verify`'s
+uncovered-lines report at all); full `npm run verify`green — 54
+files, 441 tests, 98/93.81/100/97.94% coverage (global 80% floor and
+ `src/lib/services/**`/`src/lib/repos/**`90% floor both clear),
+build passes.
+NOTE for 3.8b:`maxUses`/`minSpendCents`/`startsAt`/`endsAt`are all
+nullable in the schema and treated as "no limit" when null — a code
+row created with everything but`code`/`kind`/`value`blank is a
+perpetual, uncapped, no-minimum discount by construction, not a
+special case this function branches on.
+NOTE for 3.8b: this function's`exhausted`/`min_spend_not_met`    checks are read-time only and therefore racy against a second
+concurrent checkout — safe for the cart-side "tell the user now"
+UX, but not sufficient on their own for "a code cannot be applied
+twice" once real money is on the line. That AC needs`incrementDiscountCodeUsage`(already atomic) called from inside
+ `order-fulfillment.ts`'s existing transaction, gated by the same
+`webhook_events` idempotency row 3.4/3.5 already rely on — not a new
         lock.
 
-  - [ ] **3.8b Cart + Checkout + webhook wiring**
-        Deps: 3.8a. Cart gets a way to hold one applied discount code
-        (schema change: `carts.discount_code_id`, nullable FK); a
-        server action to apply/remove it re-validates via 3.8a on every
-        cart read, same "never trust stored state, re-derive" rule
-        `getCartSummary` already follows for stock/price. `checkout.ts`
-        passes the discount to Stripe (a `coupon`/`discounts` param, not a
-        second `price_data` line item, so Stripe's own total math stays the
-        source of truth for the session amount). `order-fulfillment.ts`
-        (3.5) increments `times_used` exactly once per paid order, inside
-        the same fulfillment transaction, keyed off the webhook's existing
+  - [x] **3.8b Cart discount apply/remove**
+        Deps: 3.8a. Split out of the original combined "3.8b Cart +
+        Checkout + webhook wiring" bullet (2026-07-23) — cart-side
+        apply/remove is independently testable DB/service/UI work; Stripe
+        session wiring and the webhook-time usage increment are a separate
+        concern with their own Stripe-mock testing needs. See 3.8c below.
+        `carts.discount_code_id` (migration `0004_warm_colossus.sql`,
+        nullable FK to `discount_codes.id`, additive/expand-safe). Repo:
+        `cart.ts`'s `setCartDiscountCode(cartId, id | null)`;
+        `discount-codes.ts`'s new `getDiscountCodeById` (the cart only
+        stores the id, not the code string, so re-validation needs a
+        by-id lookup 3.8a didn't have).
+        `services/cart.ts`: the line/subtotal half of the old
+        `getCartSummary` was extracted into a private
+        `computeLinesAndSubtotal(cartId)` so `applyDiscountCode` can
+        validate a new code against the cart's real re-priced/re-clamped
+        subtotal via the same code path `getCartSummary` uses, instead of
+        a second, divergent subtotal computation. New private
+        `resolveDiscount(cartId, discountCodeId, subtotalCents)` re-runs
+        3.8a's `validateDiscountCode` on every `getCartSummary` read
+        (never trusts the stored `discount_code_id` alone) and clears +
+        reports a `discount_removed` adjustment (new `CartAdjustment`
+        variant) when a previously-applied code has since gone invalid —
+        expired, exhausted by another checkout, or the cart's subtotal
+        dropped below min-spend after a line was removed. New exported
+        `applyDiscountCode(cartId, code)` / `removeDiscountCode(cartId)`.
+        `CartSummary` gained `discountCents`, `totalCents`
+        (`subtotalCents - discountCents`), `appliedDiscountCode: {id,
+    code} | null`. `discount.ts` gained `DiscountRejectReason` (an
+        `Extract<DiscountValidationResult, {ok:false}>["reason"]` alias)
+        so `cart.ts` didn't need to hand-duplicate that literal union.
+        Actions (`lib/actions/cart.ts`): `applyDiscountCodeAction`
+        redirects to `/cart?discount_error=<reason>` on rejection (same
+        `?checkout_error=` pattern 3.3 established) rather than a silent
+        no-op, since a bad code is a real user-facing outcome, not a
+        malformed-request case; `removeDiscountCodeAction` just clears
+        and revalidates. New `cart-form.ts` schema
+        (`applyDiscountCodeFormSchema`, no `.catch()` fallback — a
+        blank code has no sensible default to silently apply).
+        UI (`cart/page.tsx`): an "Discount code" apply form when none is
+        applied; the applied code + a remove button when one is;
+        Subtotal/Discount/Total line breakdown (Discount row only shown
+        when `discountCents > 0`); a `discount_error` alert banner
+        (`DISCOUNT_ERROR_MESSAGES` maps every `DiscountRejectReason` plus
+        the action's own `"invalid_code"` sentinel to copy); the
+        adjustments list's `key` could no longer use
+        `adjustment.variantId` unconditionally since `discount_removed`
+        has no `variantId` — keyed on `type`+code/variantId+index instead.
+        Tests: 2 new repo cases (`getDiscountCodeById` found/not-found)
+        in `discount-codes.test.ts`; 1 new repo case
+        (`setCartDiscountCode` set + clear) in `cart.test.ts`; 6 new
+        service cases in `services/cart.test.ts` (apply valid, reject
+        unknown code, reject below min-spend, applying a second code
+        replaces the first, remove, auto-clear-and-report an
+        since-exhausted code) plus the existing empty-summary case
+        updated for the three new `CartSummary` fields; 4 new action
+        cases in `actions/cart.test.ts` (apply persists the id, reject
+        redirects with the reason, blank-code redirects with
+        `invalid_code` and never touches the cart, remove clears) —
+        needed a `next/navigation` `redirect()` mock following
+        `checkout.test.ts`'s `TestRedirect`-throws pattern, since this
+        cart-actions file had never redirected before; 6 new page cases
+        in `cart/page.test.tsx` (form shown with no code applied, applied
+        code + discount amount + total shown, `discount_error` banner,
+        stale-code auto-clear renders the adjustment message and hides
+        the remove button). Every new test confirmed red first (import-
+        resolution or "is not a function" errors) before implementing.
+        AC met: 100% coverage on `discount-codes.ts`/`cart.ts` (repo);
+        `services/cart.ts` 95.45/88/100/95.45%
+        (stmts/branch/funcs/lines — the two uncovered branches are
+        `resolveDiscount`'s "the referenced discount_codes row is gone"
+        case, unreachable in practice since the FK has no
+        cascade/soft-delete path to make a cart's `discount_code_id`
+        dangle, and one pre-existing `updateCartItemQuantity` branch
+        predating this task); full `npm run verify` green: 54 files, 458
+        tests, 97.79/93.79/99.59/97.72% global coverage (80% floor and
+        90% `services`/`repos` floor both clear), build passes.
+        **Flaky-test fix, unrelated to the AC but blocking it:**
+        `getCartSummary` originally ran its new `getCartById` read and
+        the existing `computeLinesAndSubtotal` read via `Promise.all`.
+        That alone (no logic change) made
+        `order-fulfillment.test.ts`'s pre-existing concurrent-oversell
+        test (3.6) intermittently fail — one of the two concurrently
+        `fulfillCheckoutSession`'d orders was never created at all — at
+        roughly a 30-40% rate when preceded by another test in the same
+        file, 0/10 at baseline (before this task's `getCartSummary`
+        change) and 0/30 in a standalone `tsx` repro outside vitest
+        entirely, so this is a vitest-environment/pg.Pool-contention
+        artifact of this function briefly holding one more concurrent
+        connection, not a bug in the oversell-guard logic itself.
+        Fixed by making the two reads sequential instead of parallel
+        (comment left in `cart.ts` explaining why, for the next person
+        tempted to "optimize" it back to `Promise.all`). Verified 10/10
+        clean on the specific two-test combination that reproduced it
+        pre-fix, plus 5 full clean `npm run verify` coverage runs.
+        NOTE for 3.8c: `CartSummary.appliedDiscountCode` (`{id, code}`)
+        and `discountCents` are what checkout.ts needs to build the
+        Stripe `discounts` param — the id for the theoretical own-Coupon
+        sync question 3.8c's fix_plan bullet already flags, the cents
+        amount as a fallback if that turns out not to be needed.
+        `order-fulfillment.ts` still needs to call
+        `incrementDiscountCodeUsage` — untouched by this task.
+
+  - [ ] **3.8c Checkout + webhook wiring**
+        Deps: 3.8b. `checkout.ts` passes the discount to Stripe (a
+        `coupon`/`discounts` param, not a second `price_data` line item, so
+        Stripe's own total math stays the source of truth for the session
+        amount) — likely needs a Stripe Coupon sync step, since Stripe
+        discounts a session via a Coupon/Promotion Code object, not an
+        arbitrary cents amount; check `specs/05-payments.md` and decide the
+        sync shape before implementing (mirror 3.2's product sync pattern
+        if a persistent Coupon is needed, keyed off `discount_codes.id`
+        the same idempotent way). `order-fulfillment.ts` (3.5) increments
+        `times_used` exactly once per paid order, inside the same
+        fulfillment transaction, keyed off the webhook's existing
         `webhook_events` idempotency guard — this is what makes "a code
         cannot be applied twice" hold under concurrent checkouts, not the
         cart-time check alone (a read-then-check at apply time is

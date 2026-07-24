@@ -14,17 +14,35 @@ vi.mock("@/lib/cart-cookie", () => ({
   }),
 }));
 
+// Same TestRedirect pattern as checkout.test.ts: redirect()'s real type is
+// `(url: string) => never` (it throws to unwind the action), so the mock
+// must throw too — applyDiscountCodeAction's error-path redirect() calls
+// have no explicit `return`, and a non-throwing mock would let execution
+// fall through into the next statement.
+class TestRedirect extends Error {
+  constructor(public url: string) {
+    super(`REDIRECT:${url}`);
+  }
+}
+vi.mock("next/navigation", () => ({
+  redirect: vi.fn((url: string) => {
+    throw new TestRedirect(url);
+  }),
+}));
+
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db/client";
 import {
   cartItems,
   carts,
+  discountCodes,
   inventoryMovements,
   productVariants,
   products,
 } from "@/lib/db/schema";
 import {
   createCart,
+  getCartById,
   getCartItem,
   listCartItemsByCartId,
 } from "@/lib/repos/cart";
@@ -33,7 +51,9 @@ import { createProduct } from "@/lib/repos/products";
 import { createVariant } from "@/lib/repos/variants";
 import {
   addToCartAction,
+  applyDiscountCodeAction,
   removeCartItemAction,
+  removeDiscountCodeAction,
   updateCartItemAction,
 } from "./cart";
 
@@ -55,6 +75,7 @@ function formData(fields: Record<string, string>): FormData {
 describe("cart actions", () => {
   const insertedProductIds: string[] = [];
   const insertedVariantIds: string[] = [];
+  const insertedDiscountCodeIds: string[] = [];
 
   beforeEach(() => {
     cartCookie.cartId = undefined;
@@ -65,6 +86,9 @@ describe("cart actions", () => {
     if (cartCookie.cartId) {
       await db.delete(cartItems).where(eq(cartItems.cartId, cartCookie.cartId));
       await db.delete(carts).where(eq(carts.id, cartCookie.cartId));
+    }
+    for (const id of insertedDiscountCodeIds.splice(0)) {
+      await db.delete(discountCodes).where(eq(discountCodes.id, id));
     }
     const variantIds = insertedVariantIds.splice(0);
     if (variantIds.length > 0) {
@@ -213,5 +237,70 @@ describe("cart actions", () => {
     await removeCartItemAction(formData({ variantId: "not-a-uuid" }));
 
     expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  async function makeDiscountCode(
+    overrides: Partial<typeof discountCodes.$inferInsert>,
+  ) {
+    const [created] = await db
+      .insert(discountCodes)
+      .values({ code: "ACTIONTEST", kind: "fixed", value: 100, ...overrides })
+      .returning();
+    insertedDiscountCodeIds.push(created!.id);
+    return created!;
+  }
+
+  it("applyDiscountCodeAction applies a valid code to the cart", async () => {
+    const variant = await makeVariant(
+      "test-cart-action-discount-apply",
+      "TEST-CA-DISCOUNT-APPLY",
+    );
+    const cart = await createCart();
+    cartCookie.cartId = cart.id;
+    await addToCartAction(formData({ variantId: variant.id, quantity: "1" }));
+    const code = await makeDiscountCode({ code: "ACTIONAPPLY" });
+
+    await applyDiscountCodeAction(formData({ code: "ACTIONAPPLY" }));
+
+    const stored = await getCartById(cart.id);
+    expect(stored?.discountCodeId).toBe(code.id);
+    expect(revalidatePath).toHaveBeenCalledWith("/", "layout");
+  });
+
+  it("applyDiscountCodeAction redirects with the rejection reason for an invalid code", async () => {
+    const cart = await createCart();
+    cartCookie.cartId = cart.id;
+
+    await expect(
+      applyDiscountCodeAction(formData({ code: "DOES-NOT-EXIST" })),
+    ).rejects.toThrow("REDIRECT:/cart?discount_error=not_found");
+  });
+
+  it("applyDiscountCodeAction redirects for a missing/blank code without touching the cart", async () => {
+    const cart = await createCart();
+    cartCookie.cartId = cart.id;
+
+    await expect(
+      applyDiscountCodeAction(formData({ code: "  " })),
+    ).rejects.toThrow("REDIRECT:/cart?discount_error=invalid_code");
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("removeDiscountCodeAction clears an applied code", async () => {
+    const variant = await makeVariant(
+      "test-cart-action-discount-remove",
+      "TEST-CA-DISCOUNT-REMOVE",
+    );
+    const cart = await createCart();
+    cartCookie.cartId = cart.id;
+    await addToCartAction(formData({ variantId: variant.id, quantity: "1" }));
+    await makeDiscountCode({ code: "ACTIONREMOVE" });
+    await applyDiscountCodeAction(formData({ code: "ACTIONREMOVE" }));
+
+    await removeDiscountCodeAction();
+
+    const stored = await getCartById(cart.id);
+    expect(stored?.discountCodeId).toBeNull();
+    expect(revalidatePath).toHaveBeenCalledWith("/", "layout");
   });
 });

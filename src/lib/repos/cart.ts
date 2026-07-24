@@ -81,3 +81,19 @@ export async function deleteCartItemsByCartId(
 ): Promise<void> {
   await executor.delete(cartItems).where(eq(cartItems.cartId, cartId));
 }
+
+// Sets or clears (via `null`) the cart's one applied discount code (task
+// 3.8b). The cart service re-validates it against the live subtotal on every
+// read rather than trusting this column alone.
+export async function setCartDiscountCode(
+  cartId: string,
+  discountCodeId: string | null,
+  executor: DbExecutor = db,
+): Promise<Cart> {
+  const [cart] = await executor
+    .update(carts)
+    .set({ discountCodeId, updatedAt: new Date() })
+    .where(eq(carts.id, cartId))
+    .returning();
+  return cart!;
+}

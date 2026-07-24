@@ -3,7 +3,12 @@ import Link from "next/link";
 import { readCartId } from "@/lib/cart-cookie";
 import { formatPriceCents } from "@/lib/format";
 import { getCartSummary, type CartSummary } from "@/lib/services/cart";
-import { removeCartItemAction, updateCartItemAction } from "@/lib/actions/cart";
+import {
+  applyDiscountCodeAction,
+  removeCartItemAction,
+  removeDiscountCodeAction,
+  updateCartItemAction,
+} from "@/lib/actions/cart";
 import { createCheckoutSessionAction } from "@/lib/actions/checkout";
 
 // Reads cookies() (via readCartId) — Next opts this route into dynamic
@@ -15,7 +20,15 @@ export const dynamic = "force-dynamic";
 async function loadCartSummary(): Promise<CartSummary> {
   const cartId = await readCartId();
   if (!cartId) {
-    return { cartId: "", lines: [], subtotalCents: 0, adjustments: [] };
+    return {
+      cartId: "",
+      lines: [],
+      subtotalCents: 0,
+      discountCents: 0,
+      totalCents: 0,
+      appliedDiscountCode: null,
+      adjustments: [],
+    };
   }
   return getCartSummary(cartId);
 }
@@ -26,7 +39,33 @@ function adjustmentMessage(
   if (adjustment.type === "removed") {
     return `${adjustment.productName} is no longer available and was removed from your cart.`;
   }
-  return `${adjustment.productName} quantity was reduced to ${adjustment.adjustedQuantity} (limited stock).`;
+  if (adjustment.type === "quantity_reduced") {
+    return `${adjustment.productName} quantity was reduced to ${adjustment.adjustedQuantity} (limited stock).`;
+  }
+  return `Discount code ${adjustment.code} is no longer valid and was removed.`;
+}
+
+// `applyDiscountCodeAction`'s (src/lib/actions/cart.ts) redirect reasons —
+// `validateDiscountCode`'s (3.8a) rejection reasons plus the action's own
+// `"invalid_code"` sentinel for a blank/missing form field.
+const DISCOUNT_ERROR_MESSAGES: Record<string, string> = {
+  invalid_code: "Enter a discount code to apply it.",
+  not_found: "That discount code doesn't exist.",
+  inactive: "That discount code is no longer available.",
+  not_started: "That discount code isn't active yet.",
+  expired: "That discount code has expired.",
+  exhausted: "That discount code is no longer available (usage limit reached).",
+  min_spend_not_met:
+    "Your cart subtotal doesn't meet that code's minimum spend.",
+};
+
+function discountErrorMessage(reason: string | undefined): string | null {
+  if (!reason) {
+    return null;
+  }
+  return (
+    DISCOUNT_ERROR_MESSAGES[reason] ?? "That discount code couldn't be applied."
+  );
 }
 
 // `checkout_error`'s two values are `createCheckoutSession`'s (3.3)
@@ -49,11 +88,13 @@ function checkoutErrorMessage(reason: string | undefined): string | null {
 export default async function CartPage({
   searchParams,
 }: {
-  searchParams: Promise<{ checkout_error?: string }>;
+  searchParams: Promise<{ checkout_error?: string; discount_error?: string }>;
 }) {
   const summary = await loadCartSummary();
-  const { checkout_error: checkoutError } = await searchParams;
+  const { checkout_error: checkoutError, discount_error: discountError } =
+    await searchParams;
   const checkoutErrorText = checkoutErrorMessage(checkoutError);
+  const discountErrorText = discountErrorMessage(discountError);
   // Fresh per render, embedded in the checkout form below: two submits of
   // the same rendered page (e.g. a double-click) reuse this value and so
   // resolve to the same Stripe idempotency key, but a reload or a return
@@ -76,13 +117,30 @@ export default async function CartPage({
         </p>
       )}
 
+      {discountErrorText && (
+        <p
+          role="alert"
+          className="mt-4 rounded-md border border-lavender-dark/30 bg-lavender/10 p-3 text-sm text-ink"
+        >
+          {discountErrorText}
+        </p>
+      )}
+
       {summary.adjustments.length > 0 && (
         <ul
           role="status"
           className="mt-4 space-y-1 rounded-md border border-lavender-dark/30 bg-lavender/10 p-3 text-sm text-ink"
         >
-          {summary.adjustments.map((adjustment) => (
-            <li key={adjustment.variantId}>{adjustmentMessage(adjustment)}</li>
+          {summary.adjustments.map((adjustment, index) => (
+            <li
+              key={
+                adjustment.type === "discount_removed"
+                  ? `discount-${adjustment.code}`
+                  : `${adjustment.type}-${adjustment.variantId}-${index}`
+              }
+            >
+              {adjustmentMessage(adjustment)}
+            </li>
           ))}
         </ul>
       )}
@@ -174,9 +232,67 @@ export default async function CartPage({
             ))}
           </ul>
 
-          <div className="mt-6 flex justify-end gap-4 text-lg font-semibold text-ink">
-            <span>Subtotal</span>
-            <span>{formatPriceCents(summary.subtotalCents)}</span>
+          <div className="mt-6 flex flex-col items-end gap-3">
+            {summary.appliedDiscountCode ? (
+              <div className="flex items-center gap-3 text-sm text-ink">
+                <span>
+                  Discount code{" "}
+                  <span className="font-medium">
+                    {summary.appliedDiscountCode.code}
+                  </span>
+                </span>
+                <form action={removeDiscountCodeAction}>
+                  <button
+                    type="submit"
+                    aria-label={`Remove discount code ${summary.appliedDiscountCode.code}`}
+                    className="font-medium text-lavender-dark underline"
+                  >
+                    Remove discount code
+                  </button>
+                </form>
+              </div>
+            ) : (
+              <form
+                action={applyDiscountCodeAction}
+                className="flex items-end gap-2"
+              >
+                <div>
+                  <label
+                    htmlFor="discount-code"
+                    className="block text-xs font-medium text-ink"
+                  >
+                    Discount code
+                  </label>
+                  <input
+                    id="discount-code"
+                    type="text"
+                    name="code"
+                    className="mt-1 w-40 rounded-md border border-ink/20 px-2 py-1.5 text-sm"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="rounded-md border border-ink/20 px-3 py-1.5 text-sm"
+                >
+                  Apply
+                </button>
+              </form>
+            )}
+
+            <div className="flex justify-end gap-4 text-sm text-ink">
+              <span>Subtotal</span>
+              <span>{formatPriceCents(summary.subtotalCents)}</span>
+            </div>
+            {summary.discountCents > 0 && (
+              <div className="flex justify-end gap-4 text-sm text-ink">
+                <span>Discount</span>
+                <span>-{formatPriceCents(summary.discountCents)}</span>
+              </div>
+            )}
+            <div className="flex justify-end gap-4 text-lg font-semibold text-ink">
+              <span>Total</span>
+              <span>{formatPriceCents(summary.totalCents)}</span>
+            </div>
           </div>
 
           <form

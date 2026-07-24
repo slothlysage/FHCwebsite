@@ -5,6 +5,7 @@ import { db } from "@/lib/db/client";
 import { discountCodes } from "@/lib/db/schema";
 import {
   getDiscountCodeByCode,
+  getDiscountCodeById,
   incrementDiscountCodeUsage,
 } from "@/lib/repos/discount-codes";
 
@@ -44,6 +45,24 @@ describe("discount-codes repo", () => {
 
   it("returns undefined for a code that doesn't exist", async () => {
     const found = await getDiscountCodeByCode("NOPE_NOT_A_CODE");
+    expect(found).toBeUndefined();
+  });
+
+  it("finds a code by id", async () => {
+    const [created] = await db
+      .insert(discountCodes)
+      .values({ code: "BYID", kind: "fixed", value: 250 })
+      .returning();
+    insertedIds.push(created!.id);
+
+    const found = await getDiscountCodeById(created!.id);
+    expect(found?.code).toBe("BYID");
+  });
+
+  it("returns undefined for an id that doesn't exist", async () => {
+    const found = await getDiscountCodeById(
+      "00000000-0000-0000-0000-000000000000",
+    );
     expect(found).toBeUndefined();
   });
 

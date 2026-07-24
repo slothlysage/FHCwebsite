@@ -1,16 +1,20 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 
 import { readCartId, writeCartId } from "@/lib/cart-cookie";
 import { createCart, getCartById } from "@/lib/repos/cart";
 import {
   addToCart,
+  applyDiscountCode,
+  removeDiscountCode,
   removeFromCart,
   updateCartItemQuantity,
 } from "@/lib/services/cart";
 import {
   parseAddToCartForm,
+  parseApplyDiscountCodeForm,
   parseRemoveCartItemForm,
   parseUpdateCartItemForm,
 } from "@/lib/validation/cart-form";
@@ -75,5 +79,31 @@ export async function removeCartItemAction(formData: FormData): Promise<void> {
   }
   const cartId = await getOrCreateCartId();
   await removeFromCart(cartId, parsed.data.variantId);
+  revalidateCart();
+}
+
+// Unlike the actions above, a bad discount code is a real, user-facing
+// outcome ("that code doesn't work"), not a silent no-op — surfaced via a
+// redirect query param, the same `?checkout_error=` pattern
+// createCheckoutSessionAction (3.3) already established, rather than adding
+// a second error-reporting mechanism to this file.
+export async function applyDiscountCodeAction(
+  formData: FormData,
+): Promise<void> {
+  const parsed = parseApplyDiscountCodeForm(formData);
+  if (!parsed.success) {
+    redirect("/cart?discount_error=invalid_code");
+  }
+  const cartId = await getOrCreateCartId();
+  const result = await applyDiscountCode(cartId, parsed.data.code);
+  if (!result.ok) {
+    redirect(`/cart?discount_error=${result.reason}`);
+  }
+  revalidateCart();
+}
+
+export async function removeDiscountCodeAction(): Promise<void> {
+  const cartId = await getOrCreateCartId();
+  await removeDiscountCode(cartId);
   revalidateCart();
 }

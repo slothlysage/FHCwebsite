@@ -305,6 +305,11 @@ export const orderItems = pgTable("order_items", {
 // in sync.
 export const carts = pgTable("carts", {
   id: uuid("id").primaryKey().defaultRandom(),
+  // One applied discount code at a time (task 3.8b). Re-validated against
+  // the current subtotal on every getCartSummary read — this column is
+  // "which code the customer typed in," not "how much is discounted," which
+  // is why there's no discount_cents column here to keep in sync.
+  discountCodeId: uuid("discount_code_id").references(() => discountCodes.id),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
