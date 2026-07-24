@@ -24,6 +24,23 @@ vi.mock("@/lib/auth/session-cookie", () => ({
   }),
 }));
 
+// Mirrors how Next actually behaves (`redirect()`'s real type is `(url:
+// string) => never` — it throws internally to unwind the action), same
+// mocking pattern as checkout.test.ts. Matters for correctness here too:
+// loginAction's guard clauses call `redirect()` without an explicit
+// `return`, so a non-throwing mock would fall through into the next
+// statement instead of stopping.
+class TestRedirect extends Error {
+  constructor(public url: string) {
+    super(`REDIRECT:${url}`);
+  }
+}
+vi.mock("next/navigation", () => ({
+  redirect: vi.fn((url: string) => {
+    throw new TestRedirect(url);
+  }),
+}));
+
 import { generateCsrfToken } from "@/lib/auth/csrf-token";
 import { hashPassword } from "@/lib/auth/password";
 import { verifySession } from "@/lib/auth/session";
@@ -69,46 +86,43 @@ describe("admin auth actions", () => {
   });
 
   describe("loginAction", () => {
-    it("rejects a request whose csrf field doesn't match the cookie", async () => {
+    it("redirects to the login page with a csrf_mismatch error when the csrf field doesn't match the cookie", async () => {
       csrfCookie.token = generateCsrfToken();
-      const result = await loginAction(
-        formData({ email, password, csrfToken: "wrong-token" }),
-      );
-      expect(result).toEqual({ ok: false, reason: "csrf_mismatch" });
+      await expect(
+        loginAction(formData({ email, password, csrfToken: "wrong-token" })),
+      ).rejects.toThrow("REDIRECT:/admin/login?error=csrf_mismatch");
       expect(sessionCookie.token).toBeUndefined();
     });
 
-    it("rejects a request with no csrf cookie at all", async () => {
+    it("redirects to the login page with a csrf_mismatch error when there is no csrf cookie at all", async () => {
       const token = generateCsrfToken();
-      const result = await loginAction(
-        formData({ email, password, csrfToken: token }),
-      );
-      expect(result).toEqual({ ok: false, reason: "csrf_mismatch" });
+      await expect(
+        loginAction(formData({ email, password, csrfToken: token })),
+      ).rejects.toThrow("REDIRECT:/admin/login?error=csrf_mismatch");
     });
 
-    it("rejects a request missing the password field, with a matching csrf token", async () => {
+    it("redirects with an invalid_credentials error when the password field is missing, with a matching csrf token", async () => {
       const token = generateCsrfToken();
       csrfCookie.token = token;
-      const result = await loginAction(formData({ email, csrfToken: token }));
-      expect(result).toEqual({ ok: false, reason: "invalid_credentials" });
+      await expect(
+        loginAction(formData({ email, csrfToken: token })),
+      ).rejects.toThrow("REDIRECT:/admin/login?error=invalid_credentials");
     });
 
-    it("rejects the wrong password with a matching csrf token", async () => {
+    it("redirects with an invalid_credentials error for the wrong password, with a matching csrf token", async () => {
       const token = generateCsrfToken();
       csrfCookie.token = token;
-      const result = await loginAction(
-        formData({ email, password: "nope", csrfToken: token }),
-      );
-      expect(result).toEqual({ ok: false, reason: "invalid_credentials" });
+      await expect(
+        loginAction(formData({ email, password: "nope", csrfToken: token })),
+      ).rejects.toThrow("REDIRECT:/admin/login?error=invalid_credentials");
     });
 
-    it("logs in with correct credentials and a matching csrf token, issuing a session cookie", async () => {
+    it("logs in with correct credentials and a matching csrf token, issuing a session cookie and redirecting to /admin", async () => {
       const token = generateCsrfToken();
       csrfCookie.token = token;
-      const result = await loginAction(
-        formData({ email, password, csrfToken: token }),
-      );
-      expect(result).toEqual({ ok: true });
+      await expect(
+        loginAction(formData({ email, password, csrfToken: token })),
+      ).rejects.toThrow("REDIRECT:/admin");
       expect(sessionCookie.token).toBeTruthy();
 
       const verified = await verifySession(sessionCookie.token!);
@@ -120,15 +134,16 @@ describe("admin auth actions", () => {
       csrfCookie.token = token;
 
       // First login issues session A.
-      await loginAction(formData({ email, password, csrfToken: token }));
+      await expect(
+        loginAction(formData({ email, password, csrfToken: token })),
+      ).rejects.toThrow("REDIRECT:/admin");
       const firstToken = sessionCookie.token!;
 
       // Logging in again while that cookie is presented rotates it: the old
       // token stops verifying, a new one takes its place.
-      const result = await loginAction(
-        formData({ email, password, csrfToken: token }),
-      );
-      expect(result).toEqual({ ok: true });
+      await expect(
+        loginAction(formData({ email, password, csrfToken: token })),
+      ).rejects.toThrow("REDIRECT:/admin");
       const secondToken = sessionCookie.token!;
       expect(secondToken).not.toBe(firstToken);
 
@@ -152,7 +167,9 @@ describe("admin auth actions", () => {
     it("revokes the current session so it no longer verifies on the next request, and clears the cookie", async () => {
       const token = generateCsrfToken();
       csrfCookie.token = token;
-      await loginAction(formData({ email, password, csrfToken: token }));
+      await expect(
+        loginAction(formData({ email, password, csrfToken: token })),
+      ).rejects.toThrow("REDIRECT:/admin");
       const issuedToken = sessionCookie.token!;
       expect(await verifySession(issuedToken)).toEqual(
         expect.objectContaining({ valid: true }),

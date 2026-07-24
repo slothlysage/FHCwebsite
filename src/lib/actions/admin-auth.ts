@@ -4,6 +4,8 @@
 // Server Actions (specs/04-admin.md, task 4.1c) — same idiom as
 // src/lib/actions/cart.ts: thin orchestration only, all credential/session
 // logic already lives in src/lib/auth/**.
+import { redirect } from "next/navigation";
+
 import { csrfTokensMatch } from "@/lib/auth/csrf";
 import { readCsrfCookie } from "@/lib/auth/csrf-cookie";
 import { CSRF_FIELD_NAME } from "@/lib/auth/csrf-token";
@@ -15,12 +17,11 @@ import {
   writeAdminSessionToken,
 } from "@/lib/auth/session-cookie";
 
-export type AdminLoginResult =
-  | { ok: true }
-  | { ok: false; reason: "csrf_mismatch" | "invalid_credentials" | "locked" };
-
 export type AdminLogoutResult =
   { ok: true } | { ok: false; reason: "csrf_mismatch" };
+
+const LOGIN_PATH = "/admin/login";
+const ADMIN_HOME_PATH = "/admin";
 
 async function csrfOk(formData: FormData): Promise<boolean> {
   const submitted = formData.get(CSRF_FIELD_NAME);
@@ -31,22 +32,28 @@ async function csrfOk(formData: FormData): Promise<boolean> {
   );
 }
 
-export async function loginAction(
-  formData: FormData,
-): Promise<AdminLoginResult> {
+// Redirects rather than returning a result object — same progressive-
+// enhancement convention as applyDiscountCodeAction/
+// createCheckoutSessionAction (src/lib/actions/cart.ts, checkout.ts): a
+// plain <form action={loginAction}> works with no client JS only if the
+// action itself drives navigation. The error reason travels as a query
+// param the login page maps to copy, never leaking *which* of "no such
+// user"/"wrong password" applies (both collapse to attemptLogin's single
+// "invalid_credentials" reason).
+export async function loginAction(formData: FormData): Promise<void> {
   if (!(await csrfOk(formData))) {
-    return { ok: false, reason: "csrf_mismatch" };
+    redirect(`${LOGIN_PATH}?error=csrf_mismatch`);
   }
 
   const email = formData.get("email");
   const password = formData.get("password");
   if (typeof email !== "string" || typeof password !== "string") {
-    return { ok: false, reason: "invalid_credentials" };
+    redirect(`${LOGIN_PATH}?error=invalid_credentials`);
   }
 
   const result = await attemptLogin(email, password);
   if (!result.ok) {
-    return { ok: false, reason: result.reason };
+    redirect(`${LOGIN_PATH}?error=${result.reason}`);
   }
 
   // Login always rotates: revoke whatever session cookie the browser
@@ -56,7 +63,7 @@ export async function loginAction(
   const { token } = await rotateSession(result.adminUserId, previousToken);
   await writeAdminSessionToken(token);
 
-  return { ok: true };
+  redirect(ADMIN_HOME_PATH);
 }
 
 export async function logoutAction(

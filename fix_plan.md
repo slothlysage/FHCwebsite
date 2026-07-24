@@ -1729,7 +1729,7 @@ allow_backorder` rule — a backorder-enabled variant has no real
       `npm run verify` green: 73 files, 557 tests,
       98.12/93.95/99.65/98.07% coverage.
       Verified live via `next dev` + curl: `/faq /shipping /returns /privacy
-  /terms` all return 200 with the real content (checked for zero
+/terms` all return 200 with the real content (checked for zero
       remaining "Shopify"/"insert email"/"lorem ipsum" strings); `/about`
       and `/contact` correctly still 404, same as an arbitrary unknown path
       — confirming the footer's links to those two are still open, not
@@ -2843,25 +2843,85 @@ auth.test.ts` (9 integration tests against the real dev database —
       useful (a 404) is a real, if minor, gap once an admin actually needs
       to log in.
 
-- [ ] **4.2a Admin login page**
-      Deps: 4.2. No task in this backlog builds it, despite 4.1c and 4.2
-      both assuming "a future admin-screens task" would — discovered while
-      closing 4.2. `src/app/admin/login/page.tsx`: a plain Server
-      Component form (email, password) posting to `loginAction` (4.1c,
-      already fully implemented and tested — this task only needs a
-      `<form>` around it), embedding the CSRF token `proxy.ts` already
-      issues into a hidden field reading the `csrf_token` cookie
-      server-side. Must render per-field/form error states for each
-      `AdminLoginResult` failure reason (`csrf_mismatch`,
-      `invalid_credentials`, `locked`) without leaking which one applies
-      to an unknown-vs-wrong-password case (spec: identical message for
-      both — the copy layer must not undo 4.1a's user-enumeration timing
-      defense by being more specific in the UI than the service is).
-      On success, redirect to `/admin` (the future Dashboard route, 4.6).
-      AC: a real browser (or Playwright) run through `next dev` can type
-      real credentials from the seed script and land on an authenticated
-      `/admin` request; a wrong password shows one generic error; a
-      CSRF-stripped submission is rejected the same as any other mismatch.
+- [x] **4.2a Admin login page**
+      Deps: 4.2. No task in this backlog built it, despite 4.1c and 4.2 both
+      assuming "a future admin-screens task" would — discovered while
+      closing 4.2. `src/app/admin/login/page.tsx`: a plain async Server
+      Component form (email, password, `export const dynamic =
+    "force-dynamic"` — reads the csrf cookie, same rationale as the cart
+      page's own explicit export) posting straight to `loginAction`, with a
+      hidden `csrfToken` field populated from `readCsrfCookie()`
+      (`proxy.ts` already issues that cookie on every `/admin/**` request).
+      **Changed `loginAction` itself** (`src/lib/actions/admin-auth.ts`),
+      which 4.1c/4.2 had left returning an `AdminLoginResult` object rather
+      than redirecting: a plain `<form action={...}>` with no client JS
+      only works if the action drives navigation itself, exactly like
+      `applyDiscountCodeAction`/`createCheckoutSessionAction` (`cart.ts`/
+      `checkout.ts`) already do — so this task extended that same
+      established convention rather than introducing `useActionState`/a
+      Client Component as a new pattern. `loginAction` now redirects to
+      `/admin/login?error=<reason>` (`csrf_mismatch` | `invalid_credentials`
+      | `locked`) on failure and to `/admin` on success; return type
+      `Promise<void>`. The `AdminLoginResult` type was removed (no longer
+      returned, and nothing outside this file imported it —
+      `AdminLogoutResult`/`logoutAction` untouched, out of scope for this
+      task). The login page's own `LOGIN_ERROR_MESSAGES` map (mirroring the
+      cart page's `DISCOUNT_ERROR_MESSAGES` pattern) turns each reason into
+      copy, collapsing `invalid_credentials` to one generic "Incorrect
+      email or password." for both the unknown-email and wrong-password
+      cases — the UI never gets a chance to be more specific than
+      `attemptLogin` already is, preserving 4.1a's timing defense.
+      Gotcha hit building this: a `"use server"` file may only export async
+      functions (Next.js's build-time check) — an initial version also
+      exported a `const ADMIN_LOGIN_ERROR_REASONS` array from
+      `admin-auth.ts` for the page to reuse, which passed lint/typecheck/
+      tests but failed `next build` with "A 'use server' file can only
+      export async functions, found object." Removed the const export
+      (unused elsewhere anyway); the login page just keeps its own local
+      message map, same as the cart page's precedent. Type-only exports
+      (`AdminLogoutResult`) are erased at compile time and don't trigger
+      this rule — only runtime value exports do.
+      Tests: `src/app/admin/login/page.test.tsx` (8 RTL tests, "invoke the
+      async Server Component directly and await it" pattern from
+      `products/page.test.tsx` — labeled email/password fields, submit
+      button, hidden csrf field value from a mocked `readCsrfCookie`, no
+      alert with no `error` param, the three known reasons' messages
+      (including asserting `invalid_credentials`'s text does _not_ match
+      `/no such user|unknown email/i`), an unrecognized `error` value still
+      shows a generic fallback, jest-axe zero violations). Confirmed red
+      first (import-resolution error, `./page` didn't exist).
+      `admin-auth.test.ts`'s existing `loginAction` cases were rewritten
+      from `expect(result).toEqual(...)` to
+      `expect(loginAction(...)).rejects.toThrow("REDIRECT:/admin/login?error=...")`,
+      using the same `TestRedirect`-throwing `next/navigation` mock
+      `checkout.test.ts` already established — not a weakened test, a
+      like-for-like translation of the same assertions to match the new
+      (intentional) redirect-based contract; one previously-missed call
+      site inside the `logoutAction` describe block (which reused
+      `loginAction` to set up a session) needed the same fix.
+      AC met, verified live: `npm run verify` green (74 files, 576 tests,
+      98.16/94.14/99.65/98.11% coverage, build's route table shows `ƒ
+    /admin/login`). Then a real `next dev` + Playwright (already cached
+      from 2.1, `~/.cache/ms-playwright`) drove an actual browser: seeded
+      the one real admin user via `npm run seed-admin` (`ADMIN_EMAIL`/
+      `ADMIN_INITIAL_PASSWORD` were already in `.env.local`, previously
+      unused), submitted the wrong password — landed back on
+      `/admin/login?error=invalid_credentials` showing exactly "Incorrect
+      email or password." — then the real password, which redirected to
+      `/admin` (a 404 today, since no dashboard page exists until 4.6, but
+      the request carries a fresh `admin_session` cookie, i.e. auth
+      genuinely succeeded) with both `csrf_token` and `admin_session`
+      cookies set. The CSRF-stripped-submission half of the AC is covered
+      by `admin-auth.test.ts`'s existing unit tests (a raw same-origin
+      `fetch()` bypassing Next's real action-invocation protocol from
+      inside the page turned out not to be a valid way to reproduce that
+      path in a live browser — Next.js Server Actions aren't invoked by an
+      ad hoc POST to the form's empty `action=""`, only via its own
+      client-runtime protocol or a real `<form>` submit — so the unit test
+      is the correct place this is proven, not a gap).
+      NOTE for 4.6: `/admin` itself doesn't exist yet — `loginAction`'s
+      success redirect target is correct per this task's AC, but the
+      dashboard route is still open work.
 
 - [ ] **4.3 Product CRUD**
       Deps: 4.2, 1.3. Create, edit, publish/unpublish, soft-delete. Slug generation
