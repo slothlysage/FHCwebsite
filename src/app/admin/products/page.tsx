@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { listAdminProducts } from "@/lib/services/admin-product-listing";
 import {
   parseAdminProductFilters,
@@ -21,9 +23,17 @@ export default async function AdminProductsPage({
 
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-10 sm:px-6">
-      <h1 className="text-2xl font-semibold tracking-tight text-ink">
-        Products
-      </h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold tracking-tight text-ink">
+          Products
+        </h1>
+        <Link
+          href="/admin/products/new"
+          className="rounded-md bg-lavender px-5 py-2.5 text-sm font-semibold text-white hover:bg-lavender-dark"
+        >
+          Add product
+        </Link>
+      </div>
 
       <form method="get" className="mt-6 flex flex-wrap items-end gap-4">
         <div>
@@ -87,8 +97,11 @@ export default async function AdminProductsPage({
               <th scope="col" className="py-2 pr-4 font-medium text-ink">
                 SKUs
               </th>
-              <th scope="col" className="py-2 font-medium text-ink">
+              <th scope="col" className="py-2 pr-4 font-medium text-ink">
                 Status
+              </th>
+              <th scope="col" className="py-2 font-medium text-ink">
+                <span className="sr-only">Actions</span>
               </th>
             </tr>
           </thead>
@@ -99,7 +112,16 @@ export default async function AdminProductsPage({
                 <td className="py-2 pr-4 text-ink/80">
                   {item.skus.length > 0 ? item.skus.join(", ") : "—"}
                 </td>
-                <td className="py-2 text-ink/80">{item.status}</td>
+                <td className="py-2 pr-4 text-ink/80">{item.status}</td>
+                <td className="py-2 text-ink/80">
+                  <Link
+                    href={`/admin/products/${item.id}/edit`}
+                    aria-label={`Edit ${item.name}`}
+                    className="text-lavender-dark hover:underline"
+                  >
+                    Edit
+                  </Link>
+                </td>
               </tr>
             ))}
           </tbody>

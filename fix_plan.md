@@ -3045,13 +3045,98 @@ auth.test.ts` (9 integration tests against the real dev database —
         there's no seeded admin password on hand to drive a real browser
         login in this sandbox.
 
-  - [ ] **4.3c Product create/edit form + actions**
-        Deps: 4.3a, 4.3b. Create and edit screens using 4.3a's shared
-        validation; per-field error rendering on the form. Categories/
-        attributes editing may be deferred to a follow-up if variant/image
-        management (4.4/4.5) turns out to be a cleaner place for the
-        combined editor UI — decide when this subtask is picked up, don't
-        guess now.
+  - [x] **4.3c Product create/edit form + actions** (2026-07-24)
+        Deps: 4.3a, 4.3b. Decided on pickup: categories/attributes/variants/
+        images editing is deferred to 4.4/4.5 (their own repos/UI don't
+        exist yet); this task covers exactly 4.3a's `productFormSchema`
+        fields — name, slug, description, ingredients, safetyInfo, careInfo.
+        `src/lib/actions/admin-products.ts` (new) — `createProductAction`/
+        `updateProductAction(productId, prevState, formData)`, both
+        `(state, formData) => Promise<ProductFormState>` (not the
+        redirect-with-`?error=` pattern `admin-auth.ts`/`cart.ts` use for a
+        single error reason) so several independently-invalid fields can
+        each render their own message _and_ whatever the owner already
+        typed into the other fields survives a failed submit. CSRF mismatch
+        also returns state (`formError`), not a redirect — there's no
+        single-reason query param to redirect a multi-field form back to
+        without losing input either way, so it stays inside the same state
+        object as validation errors. On success: `generateUniqueProductSlug`
+        (4.3a) resolves the slug (manual override or name-derived,
+        self-exclusion via `excludeProductId` on edit), the products repo
+        writes it, `revalidatePath("/admin/products")`, then `redirect`.
+        `ProductFormValues`/`emptyProductFormValues` live in
+        `src/lib/validation/product-form.ts`, not this action file — a
+        `"use server"` file may only export async functions (confirmed by a
+        real `next build` failure: "A 'use server' file can only export
+        async functions, found object" — plain-object/const exports,
+        including a shared default-values constant, have to live in a
+        plain module even if only Server Action code uses them; `export
+type` survives because types are erased at compile time, so
+        `ProductFormState` staying in `admin-products.ts` was fine).
+        `src/components/admin/product-form.tsx` (new, `"use client"`) —
+        the one form shared by both screens via `useActionState`
+        (`action` prop is `createProductAction` or
+        `updateProductAction.bind(null, product.id)`; binding extra args
+        onto a Server Action is itself a valid Server Action reference).
+        This is the codebase's first `useActionState` form — every prior
+        form (login, discount code, checkout) used the simpler
+        single-error redirect pattern because it only ever had one thing
+        that could go wrong; per-field errors on a 6-field form don't fit
+        that shape without a lossy round trip. Next's Server Actions still
+        work with JS disabled through this hook (a real browser does a
+        plain POST that Next intercepts and re-renders the same route with
+        the returned state — not verified live in this sandbox the way
+        2.7b's no-JS curl walkthrough was, since there's no seeded admin
+        password on hand to drive a real authenticated browser session
+        here; see 4.3b's own NOTE on the same gap). Each field gets
+        `aria-invalid`/`aria-describedby` wired to its own error `<p
+role="alert">`, and a hint paragraph for the slug field
+        ("leave blank to auto-generate").
+        New routes: `src/app/admin/products/new/page.tsx` and
+        `src/app/admin/products/[id]/edit/page.tsx` (the latter
+        `notFound()`s on an unknown id, same pattern as the storefront
+        product detail page). `src/app/admin/products/page.tsx` (4.3b)
+        gained the "Add product" link and a per-row "Edit" link it
+        explicitly deferred — `aria-label={`Edit ${item.name}`}` on the
+        link rather than a visually-hidden text node, because a hidden
+        node repeating the row's own product name collided with
+        `getByText(product.name)` in 4.3b's own list test (two matches,
+        not one) the first time this was tried.
+        Tests: 8 `admin-products.test.ts` integration cases (csrf mismatch
+        preserves values on both actions, blank-name field error on both,
+        create with auto slug + redirect, slug collision de-duplication,
+        update writes fields + redirects, self-slug edit doesn't manufacture
+        a `-2` of itself), 4 `product-form.test.tsx` RTL cases (seeded
+        values render, a per-field error renders after the action returns
+        one — typing a whitespace-only name into the `required` field is
+        what gets a real submit event past jsdom's own client-side
+        constraint validation to reach the mocked action at all, since
+        `required` only checks non-empty — a form-level error renders
+        after a csrf mismatch, axe), 3 `new/page.test.tsx` + 3
+        `edit/page.test.tsx` cases (blank/prefilled values, csrf hidden
+        field, 404 on an unknown id, axe), 2 new `page.test.tsx` cases on
+        the existing products list (Add-product link href, per-row Edit
+        link href). All confirmed red first (import-resolution errors, or
+        for the two list-page additions, `getByRole("link", ...)` finding
+        nothing) before implementing.
+        AC met: `npm run verify` green — 84 files, 639 tests,
+        98.32/94.37/99.68/98.27% coverage (global 80% floor and the 90%
+        `src/lib/services`/`src/lib/stripe` floors both clear), build
+        passes (`ƒ /admin/products/new`, `ƒ /admin/products/[id]/edit` in
+        the route table). Verified live via `next dev` + curl: both new
+        routes correctly 307-redirect to `/admin/login` for an
+        unauthenticated request, same as `/admin/products` itself — proof
+        route protection (4.2)'s `/admin/**` wildcard already covers routes
+        that didn't exist when 4.2 was written, with no changes needed
+        there.
+        NOTE for 4.3d: publish-gate/soft-delete actions belong in
+        `admin-products.ts` alongside these two, not a new file — same
+        module, same CSRF/state-return conventions.
+        NOTE for 4.4/4.5: this is where the "combined editor UI" decision
+        deferred from 4.3a lands — variant/image/category/attribute editing
+        should extend this same create/edit page (e.g. an "existing product
+        only" section below the core fields on the edit screen), not a
+        separate route, so the owner edits one product in one place.
 
   - [ ] **4.3d Publish/unpublish + soft-delete actions**
         Deps: 4.3c. Publish gate (`specs/04-admin.md`: at least one image

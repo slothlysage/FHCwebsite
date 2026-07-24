@@ -47,6 +47,30 @@ export const productFormSchema = z.object({
 
 export type ProductFormInput = z.infer<typeof productFormSchema>;
 
+// The admin editor's raw, string-only field shape (4.3c) — every field
+// controlled/pre-filled as a plain string, before productFormSchema's own
+// trim/optional/blank-collapsing rules run. Lives alongside the schema (not
+// in the "use server" admin-products.ts action module, which may only
+// export async functions) since it's shared by both the create and edit
+// pages to seed a blank vs. an existing product's ProductForm.
+export type ProductFormValues = {
+  name: string;
+  slug: string;
+  description: string;
+  ingredients: string;
+  safetyInfo: string;
+  careInfo: string;
+};
+
+export const emptyProductFormValues: ProductFormValues = {
+  name: "",
+  slug: "",
+  description: "",
+  ingredients: "",
+  safetyInfo: "",
+  careInfo: "",
+};
+
 export function parseProductForm(
   formData: FormData,
 ): z.ZodSafeParseResult<ProductFormInput> {

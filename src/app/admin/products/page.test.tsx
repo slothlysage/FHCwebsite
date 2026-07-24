@@ -35,6 +35,30 @@ describe("AdminProductsPage", () => {
     expect(screen.getByLabelText("Status")).toBeInTheDocument();
   });
 
+  it("links to the new-product screen", async () => {
+    render(await withSearchParams());
+
+    expect(screen.getByRole("link", { name: "Add product" })).toHaveAttribute(
+      "href",
+      "/admin/products/new",
+    );
+  });
+
+  it("links each row to its edit screen", async () => {
+    const product = await createProduct({
+      slug: "test-admin-products-page-edit-link",
+      name: "Admin Page Edit Link Product",
+      status: "published",
+    });
+    insertedIds.push(product.id);
+
+    render(await withSearchParams({ search: "Admin Page Edit Link" }));
+
+    expect(
+      screen.getByRole("link", { name: `Edit ${product.name}` }),
+    ).toHaveAttribute("href", `/admin/products/${product.id}/edit`);
+  });
+
   it("lists a matching product's name, status, and SKU", async () => {
     const product = await createProduct({
       slug: "test-admin-products-page-match",
