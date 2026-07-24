@@ -22,6 +22,7 @@ import type {
   ParsedProduct,
   ParsedVariant,
 } from "@/lib/services/catalog-importer";
+import { slugify } from "@/lib/slugify";
 
 // Diffs/writes the pure output of `parseShopifyCsv` (1.4a) against the
 // current catalog. This module does the DB reads/writes; parsing itself
@@ -79,15 +80,6 @@ function variantChanged(
     existing.weightGrams !== parsed.weightGrams ||
     existing.position !== parsed.position
   );
-}
-
-// Shopify tags are free text; category slugs must be URL-safe.
-function slugifyCategory(name: string): string {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-+|-+$)/g, "");
 }
 
 async function importProduct(
@@ -180,7 +172,7 @@ async function importProduct(
 
   if (apply && product) {
     for (const categoryName of parsed.categories) {
-      const slug = slugifyCategory(categoryName);
+      const slug = slugify(categoryName);
       const category =
         (await getCategoryBySlug(slug, executor)) ??
         (await createCategory({ slug, name: categoryName }, executor));

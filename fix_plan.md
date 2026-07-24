@@ -2848,7 +2848,7 @@ auth.test.ts` (9 integration tests against the real dev database —
       assuming "a future admin-screens task" would — discovered while
       closing 4.2. `src/app/admin/login/page.tsx`: a plain async Server
       Component form (email, password, `export const dynamic =
-    "force-dynamic"` — reads the csrf cookie, same rationale as the cart
+  "force-dynamic"` — reads the csrf cookie, same rationale as the cart
       page's own explicit export) posting straight to `loginAction`, with a
       hidden `csrfToken` field populated from `readCsrfCookie()`
       (`proxy.ts` already issues that cookie on every `/admin/**` request).
@@ -2901,7 +2901,7 @@ auth.test.ts` (9 integration tests against the real dev database —
       `loginAction` to set up a session) needed the same fix.
       AC met, verified live: `npm run verify` green (74 files, 576 tests,
       98.16/94.14/99.65/98.11% coverage, build's route table shows `ƒ
-    /admin/login`). Then a real `next dev` + Playwright (already cached
+  /admin/login`). Then a real `next dev` + Playwright (already cached
       from 2.1, `~/.cache/ms-playwright`) drove an actual browser: seeded
       the one real admin user via `npm run seed-admin` (`ADMIN_EMAIL`/
       `ADMIN_INITIAL_PASSWORD` were already in `.env.local`, previously
@@ -2928,6 +2928,84 @@ auth.test.ts` (9 integration tests against the real dev database —
       with collision handling. Zod validation shared client and server.
       AC: soft-deleted products vanish from the storefront but remain linked from
       historical orders; validation errors render per-field.
+      Split 2026-07-24, same rationale as 1.3/1.4's umbrella split — a full
+      admin product editor (list screen, write screen, publish/soft-delete
+      actions, shared validation) is several independently-testable modules,
+      not one. This umbrella item is ticked `[x]` only once all four below
+      are `[x]`.
+
+  - [x] **4.3a Product validation schema + slug generation service** (2026-07-24)
+        Deps: 4.2, 1.3. `src/lib/slugify.ts` — extracted from
+        `catalog-import.ts`'s previously-private `slugifyCategory` (now
+        deleted; that call site uses the shared export). One slugify
+        implementation, reused by both the CSV importer's category slugs
+        and this task's product slugs, per the loop's own "search before
+        writing a sibling implementation" rule.
+        `src/lib/validation/product-form.ts` — `productFormSchema` (name
+        required/trimmed; slug optional, validated against the same
+        lowercase-alphanumeric-hyphen pattern `slugify` produces, blank →
+        `undefined`/auto-generate; description/ingredients/safetyInfo/
+        careInfo all optional, blank → `undefined`), `parseProductForm
+(formData)`, and `productFormFieldErrors(result)` (wraps zod v4's
+        `z.flattenError(...).fieldErrors` so a form can key an error slot
+        directly off `errors.name?.[0]`). Plain zod only, no Node-only
+        APIs — importable from both a client form and the Server Action
+        that will call it in 4.3c.
+        `src/lib/services/product-slug.ts` —
+        `generateUniqueProductSlug(name, {manualSlug?, excludeProductId?})`:
+        slugifies `manualSlug ?? name`, then loops appending `-2`, `-3`, ...
+        while `getProductBySlug` finds a different product at that slug;
+        `excludeProductId` lets an edit that reuses its own current slug
+        (name unchanged) return immediately instead of self-colliding.
+        Tests: `slugify.test.ts` (4 cases), `product-form.test.ts` (10
+        cases — minimal valid submission, blank-name rejection with
+        trimming, missing-name field error, valid/invalid/blank manual
+        slug, blank vs. populated optional fields, field-error mapping),
+        `product-slug.test.ts` (7 integration cases against the real dev
+        database — fresh name, collision once, collision twice past an
+        already-taken `-2`, no self-collision on a same-name edit, still
+        collides against a _different_ product while editing, manual
+        override wins over the name-derived slug, manual override still
+        gets collision-checked). All confirmed red first (import-resolution
+        errors) before implementing; the `catalog-import.test.ts` suite was
+        re-run after the `slugify` extraction to confirm the refactor
+        didn't change import behavior (8/8 still pass).
+        AC met: `npm run verify` green — 77 files, 597 tests,
+        98.19/94.25/99.66/98.14% coverage (global 80% floor and the 90%
+        `src/lib/services/**` floor both clear), build passes.
+        NOTE for 4.3b/4.3c: `getProductBySlug` (1.3a) is the only repo call
+        `generateUniqueProductSlug` needs — no new repo function was
+        required for this subtask.
+        NOTE for 4.3c: `productFormSchema` deliberately excludes
+        categories/attributes/images/variants — see that subtask's own
+        note about deciding where combined editing lives once 4.4/4.5 are
+        in scope.
+
+  - [ ] **4.3b Admin products list page**
+        Deps: 4.3a. `src/app/admin/products/page.tsx` — table with search
+        (name/SKU) and status filter, per `specs/04-admin.md`'s Screens
+        section. Read-only for now; bulk publish/unpublish lands with 4.3d.
+
+  - [ ] **4.3c Product create/edit form + actions**
+        Deps: 4.3a, 4.3b. Create and edit screens using 4.3a's shared
+        validation; per-field error rendering on the form. Categories/
+        attributes editing may be deferred to a follow-up if variant/image
+        management (4.4/4.5) turns out to be a cleaner place for the
+        combined editor UI — decide when this subtask is picked up, don't
+        guess now.
+
+  - [ ] **4.3d Publish/unpublish + soft-delete actions**
+        Deps: 4.3c. Publish gate (`specs/04-admin.md`: at least one image
+        with alt text, at least one active variant with a price, non-empty
+        ingredients and safety info) using the existing images/variants
+        repos (no new UI needed — that data already exists from the CSV
+        import). Soft-delete via the existing `softDeleteProduct` repo
+        function. Every mutation writes an `audit_log` row (before/after
+        JSON) — no repo exists yet for `audit_log`; add one here, first
+        consumer.
+        AC (from the umbrella item): soft-deleted products vanish from the
+        storefront but remain linked from historical orders; validation
+        errors render per-field.
 
 - [ ] **4.4 Variant + inventory management**
       Deps: 4.3. Per-variant SKU, price, stock. Manual stock adjustment writes an

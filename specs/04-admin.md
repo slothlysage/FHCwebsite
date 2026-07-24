@@ -241,6 +241,38 @@ A failed or skipped notification (either channel) must never roll back or
 block the order/webhook transaction that triggered it, matching the
 "email sent after commit" rule under Payments' Transactions section.
 
+### Implementation notes (4.3a — product validation schema + slug generation)
+
+- **Slugify is shared, not reimplemented.** `src/lib/slugify.ts` is the one
+  `slugify(text)` implementation in the codebase — extracted from what used
+  to be a private `slugifyCategory` inside `catalog-import.ts` (1.4b). Both
+  the CSV importer's category slugs and this Products screen's product
+  slugs call the same function. Any future free-text-to-slug need should
+  extend this module, not add a third copy.
+- **Slug field contract**: `src/lib/validation/product-form.ts`'s
+  `productFormSchema` treats a blank/whitespace-only `slug` submission as
+  "not provided" (→ `undefined`), which is what triggers auto-generation
+  downstream — it does not treat blank as a validation error. A
+  non-blank slug must already match `slugify`'s own output shape (lowercase
+  alphanumeric segments joined by single hyphens); this keeps a manually
+  typed override collision-checkable against machine-generated slugs on
+  equal footing, rather than needing a separate normalization step later.
+- **Collision handling**: `src/lib/services/product-slug.ts`'s
+  `generateUniqueProductSlug(name, {manualSlug?, excludeProductId?})` slugs
+  `manualSlug ?? name`, then probes `getProductBySlug` and appends `-2`,
+  `-3`, ... until it finds a slug with no row, or a row whose id equals
+  `excludeProductId` (the product currently being edited, so re-saving
+  without changing the name doesn't manufacture a `-2` of itself). This is
+  the only slug-uniqueness authority for the editor — 4.3c's create/edit
+  Server Action should call it rather than checking `getProductBySlug`
+  inline.
+- **Both modules are DB/Node-boundary-clean where it matters**:
+  `product-form.ts` is pure zod (no Node APIs), so it's safe to import from
+  a future client-side form component for inline validation as well as the
+  server-side action. `product-slug.ts` does hit the database (via the
+  products repo) and is server-only, same as any other `src/lib/services/**`
+  module.
+
 ## Rules
 
 - Every mutation writes an `audit_log` row with before/after JSON.
