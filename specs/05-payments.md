@@ -668,3 +668,38 @@ confirmation email should probably tell the customer the item is made to
 order"): any `order_items` row with `oversoldQuantity > 0` gets a
 "Made to order — this item ships once it's ready" line, in both the html and
 text bodies and on the success page itself.
+
+## Implementation notes (3.8a)
+
+**Validation is pure, read-only decision logic — no cart/order wiring yet.**
+`src/lib/services/discount.ts`'s `validateDiscountCode(code, subtotalCents)`
+does one repo read (`discount-codes.ts`'s `getDiscountCodeByCode`, a
+case-insensitive lookup matching the `discount_codes_code_lower_idx` shape
+from `specs/02-data-model.md`) and returns either
+`{ok:true, discountCodeId, discountCents}` or `{ok:false, reason}`. It does
+not touch `carts` or `orders` — 3.8b wires this into the cart (apply/remove)
+and into `order-fulfillment.ts`'s transaction.
+
+**Discount amount is always clamped to `[0, subtotalCents]`.** Percent:
+`Math.round(subtotal * value / 100)`. Fixed: `value` as-is. Both then go
+through `Math.min(Math.max(raw, 0), subtotalCents)` — a fixed code larger
+than the cart cannot produce a negative total, and a value column that
+somehow went negative cannot either. This is the same "server computes,
+never trusts" posture AGENT.md's Money section requires, applied to
+discounts rather than prices.
+
+**Null limit columns mean "no limit," not "invalid."** `maxUses`,
+`minSpendCents`, `startsAt`, `endsAt` are all nullable in the schema; the
+service treats a null as "this constraint doesn't apply" rather than
+rejecting the row. A code with everything but `code`/`kind`/`value` set is a
+valid perpetual, uncapped, no-minimum discount by construction.
+
+**Read-time checks are not the enforcement mechanism for "cannot be applied
+twice."** `exhausted`/`min_spend_not_met` here are a check-then-tell for the
+cart UI; they're inherently racy against a second concurrent checkout using
+the same code. The actual guarantee comes from `incrementDiscountCodeUsage`
+(atomic SQL `times_used = times_used + 1`, not read-then-write) being called
+exactly once per paid order, from inside `order-fulfillment.ts`'s existing
+transaction, gated by the same `webhook_events` idempotency row 3.4/3.5
+already use to guarantee "replaying the same event twice creates exactly one
+order." 3.8b must call it there, not re-derive a new lock.
