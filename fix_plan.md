@@ -3520,7 +3520,7 @@ image-upload.ts`: `processUploadedImage(buffer)` — caps size before doing
         worth confirming whether CI already handles this or whether it's a
         local-sandbox-only gap.
 
-  - [ ] **4.5b R2 storage client**
+  - [x] **4.5b R2 storage client** (2026-07-24)
         Deps: none (mirrors 4.7a's pattern: fetch-based client + presigned
         upload/read, `ALLOW_LIVE`-style safety not needed since R2 has no
         live/test mode split, but bucket/env misconfiguration should fail
@@ -3539,6 +3539,41 @@ image-upload.ts`: `processUploadedImage(buffer)` — caps size before doing
         real Node runtime (a scheduled worker isn't it either — same
         constraint) rather than assuming parity with local dev tests. This is
         a real open risk, not a formality — check it before 4.5c ships.
+        **Done 2026-07-24.** Used `aws4fetch` (new direct dependency,
+        zero-dep, ~5KB, fetch-based SigV4 signing built for Workers-
+        compatible runtimes) rather than `@aws-sdk/client-s3` — same
+        fetch-over-Node-HTTP rationale `src/lib/stripe/client.ts` already
+        documents, and the full AWS SDK v3 is disproportionately heavy for
+        five call sites. `getPresignedUploadUrl`/`putObject`/`getObject`/
+        `publicUrlForKey` all call a shared `getR2Config()` that throws
+        naming every missing `R2_*` var if any of the five is unset (they're
+        `.optional()` in `env.ts`, so a misconfigured deploy fails loud at
+        call time, not silently). Test fixture `tests/msw/r2-server.ts`
+        mirrors `stripe-server.ts`'s in-memory-fake-behind-msw approach, but
+        matches on a `RegExp` host pattern instead of a literal URL since the
+        account id is part of the R2 hostname. Full writeup in
+        `specs/04-admin.md`'s new "Implementation notes (4.5b)" section,
+        including the still-open sharp/workerd risk noted above — **not
+        resolved by this task**, still blocking before 4.5c wires a real
+        upload request handler. `npm run verify` green: 97 files, 749 tests,
+        98.25/94.25/99.73/98.2% coverage (global thresholds; no
+        `src/lib/storage/**` 90%-floor entry was added to
+        `vitest.config.mts`, since the task text didn't call for one the way
+        4.7a's spec explicitly does for `src/lib/shipping/**` — worth a
+        second look once 4.5c adds real money-adjacent... actually no money
+        moves through this module, so 80% global floor is the deliberate
+        choice, not an oversight).
+        Ran into one TS-only snag worth recording: `@types/node` redeclares
+        the global `Uint8Array`'s default type parameter as `ArrayBufferLike`
+        (for `Buffer` compat), which conflicts with lib.dom's fetch
+        `BodyInit` wanting `Uint8Array<ArrayBuffer>` — every plain
+        `Uint8Array`/`Buffer` fails a `body:` assignment under `tsc --noEmit`
+        even though it's fine at runtime. Fixed by slicing out a concrete
+        `ArrayBuffer` (`bytes.buffer.slice(...) as ArrayBuffer`) before the
+        `fetch` call rather than casting the whole body — see the
+        `toArrayBuffer` comment in `r2.ts`. This will resurface in 4.5c/4.7a
+        wherever a `Buffer` (sharp output, Shippo label bytes) meets a
+        `fetch` call; same fix applies.
 
   - [ ] **4.5c Admin UI + upload wiring**
         Deps: 4.5a, 4.5b, 4.3 (product edit page). Product edit page gains an

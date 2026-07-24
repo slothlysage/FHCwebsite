@@ -394,6 +394,52 @@ products.ts`'s `listProducts` gained a `search` option: a case-insensitive
   `unpublish`/`soft_delete` — 4.6/4.9's timeline UI needs a human-readable
   line for this value alongside the existing ones, nothing structurally new.
 
+## Implementation notes (4.5b — R2 storage client)
+
+- `src/lib/storage/r2.ts` uses `aws4fetch` (`AwsClient` + `AwsV4Signer`), not
+  `@aws-sdk/client-s3` — R2 is S3-compatible, but the full AWS SDK v3 is a
+  heavy, Node-`crypto`-leaning dependency; `aws4fetch` is a zero-dependency,
+  fetch-based SigV4 signer built specifically for Workers-compatible
+  environments, matching the same fetch-based rationale as
+  `src/lib/stripe/client.ts`. Endpoint shape:
+  `https://<R2_ACCOUNT_ID>.r2.cloudflarestorage.com/<R2_BUCKET>/<key>`,
+  `service: "s3"`, `region: "auto"`.
+- `getPresignedUploadUrl(key, contentType, expiresInSeconds?)` — query-string
+  SigV4 signing (`signQuery: true`). The expiry must be set on the URL's
+  `X-Amz-Expires` param _before_ signing, not passed as a signer option —
+  `aws4fetch` only fills a default (86400s) when that param is absent from
+  the URL; there is no `expires` constructor field. Default here is 900s.
+  The signed `content-type` header must be sent byte-identical on the
+  caller's actual PUT, or R2 rejects it as a signature mismatch.
+- `putObject`/`getObject` are the server-side pair 4.5c's re-upload step
+  needs (the processed responsive sizes from `image-upload.ts` don't exist
+  until our server has already run sharp on the original, so they can't go
+  through the presigned-URL path). Both fail loud (`response.ok` check) with
+  the status and body text in the error rather than swallowing a non-2xx.
+- All four exported functions call `getR2Config()` first, which throws
+  listing every missing `R2_*` var by name if any of the five (`ACCOUNT_ID`,
+  `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`, `BUCKET`, `PUBLIC_URL`) is unset —
+  deliberate fail-loud, since these are `.optional()` in `env.ts`'s schema
+  (so the app can boot without storage configured at all) but a call into
+  this module with one missing is a config bug, not a runtime condition.
+- `publicUrlForKey(key)` builds off `R2_PUBLIC_URL` (the bucket's public
+  custom domain), not the `r2.cloudflarestorage.com` API endpoint — this is
+  what gets written to `product_images.url`. Per `specs/07-security-legal.md`,
+  images are deliberately served from a separate origin.
+- **Open risk carried into 4.5c, not yet resolved**: whether `sharp` (4.5a's
+  processing step) actually runs under the real `workerd` runtime this app
+  deploys to (`@opennextjs/cloudflare`), not just Vitest's Node test
+  environment — `next/og`'s `ImageResponse` already depends on sharp at
+  request time as precedent, but sharp ships native `libvips` bindings and
+  workerd has no native-addon support. Check this before wiring 4.5c's
+  upload action calls `processUploadedImage` + `putObject` in a request
+  handler; if it silently fails or falls back, the processing step needs to
+  move somewhere with a real Node runtime instead.
+- Test fixture: `tests/msw/r2-server.ts`, an in-memory fake keyed by object
+  key, intercepting `PUT`/`GET` via a `RegExp` host pattern (the account id
+  is part of the hostname, so a literal URL match doesn't work the way
+  `tests/msw/stripe-server.ts`'s literal `api.stripe.com` match does).
+
 ## Rules
 
 - Every mutation writes an `audit_log` row with before/after JSON.
