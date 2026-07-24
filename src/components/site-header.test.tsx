@@ -43,10 +43,9 @@ describe("SiteHeader", () => {
   it("renders the site name linking home", async () => {
     cartCookie.cartId = undefined;
     render(await SiteHeader());
-    expect(screen.getByRole("link", { name: "FHC" })).toHaveAttribute(
-      "href",
-      "/",
-    );
+    expect(
+      screen.getByRole("link", { name: "Fasthorse Creations" }),
+    ).toHaveAttribute("href", "/");
   });
 
   it("renders primary navigation as a landmark", async () => {

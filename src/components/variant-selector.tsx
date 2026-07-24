@@ -54,7 +54,7 @@ export function VariantSelector({
         className={
           selected.stock > 0 || selected.allowBackorder
             ? "mt-1 text-sm text-ink/70"
-            : "mt-1 text-sm font-medium text-clay-dark"
+            : "mt-1 text-sm font-medium text-lavender-dark"
         }
       >
         {selected.stock > 0
@@ -105,7 +105,7 @@ export function VariantSelector({
         <button
           type="submit"
           disabled={selected.stock <= 0 && !selected.allowBackorder}
-          className="w-full rounded-md bg-clay px-4 py-2 text-sm font-medium text-cream disabled:cursor-not-allowed disabled:opacity-50"
+          className="w-full rounded-md bg-lavender px-4 py-2 text-sm font-medium text-cream disabled:cursor-not-allowed disabled:opacity-50"
         >
           Add to cart
         </button>

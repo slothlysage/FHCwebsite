@@ -70,7 +70,7 @@ export default async function CartPage({
       {checkoutErrorText && (
         <p
           role="alert"
-          className="mt-4 rounded-md border border-clay-dark/30 bg-clay/10 p-3 text-sm text-ink"
+          className="mt-4 rounded-md border border-lavender-dark/30 bg-lavender/10 p-3 text-sm text-ink"
         >
           {checkoutErrorText}
         </p>
@@ -79,7 +79,7 @@ export default async function CartPage({
       {summary.adjustments.length > 0 && (
         <ul
           role="status"
-          className="mt-4 space-y-1 rounded-md border border-clay-dark/30 bg-clay/10 p-3 text-sm text-ink"
+          className="mt-4 space-y-1 rounded-md border border-lavender-dark/30 bg-lavender/10 p-3 text-sm text-ink"
         >
           {summary.adjustments.map((adjustment) => (
             <li key={adjustment.variantId}>{adjustmentMessage(adjustment)}</li>
@@ -90,7 +90,7 @@ export default async function CartPage({
       {summary.lines.length === 0 ? (
         <p className="mt-8 text-sm text-ink/70">
           Your cart is empty.{" "}
-          <Link href="/products" className="underline hover:text-clay">
+          <Link href="/products" className="underline hover:text-sage-dark">
             Continue shopping
           </Link>
           .
@@ -106,7 +106,7 @@ export default async function CartPage({
                 <div className="flex-1">
                   <Link
                     href={`/products/${line.productSlug}`}
-                    className="font-medium text-ink hover:text-clay"
+                    className="font-medium text-ink hover:text-sage-dark"
                   >
                     {line.productName}
                   </Link>
@@ -115,7 +115,7 @@ export default async function CartPage({
                     {formatPriceCents(line.priceCents)} each
                   </p>
                   {line.stock <= 0 && line.allowBackorder && (
-                    <p className="text-xs text-clay-dark">Made to order</p>
+                    <p className="text-xs text-lavender-dark">Made to order</p>
                   )}
                 </div>
 
@@ -161,7 +161,7 @@ export default async function CartPage({
                   <button
                     type="submit"
                     aria-label={`Remove ${line.productName} from cart`}
-                    className="text-sm font-medium text-clay-dark underline"
+                    className="text-sm font-medium text-lavender-dark underline"
                   >
                     Remove
                   </button>
@@ -186,7 +186,7 @@ export default async function CartPage({
             <input type="hidden" name="nonce" value={checkoutNonce} />
             <button
               type="submit"
-              className="rounded-md bg-clay px-5 py-2.5 text-sm font-semibold text-white hover:bg-clay-dark"
+              className="rounded-md bg-lavender px-5 py-2.5 text-sm font-semibold text-white hover:bg-lavender-dark"
             >
               Checkout
             </button>

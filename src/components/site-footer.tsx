@@ -20,7 +20,11 @@ export function SiteFooter() {
           className="flex flex-wrap gap-x-4 gap-y-2 text-sm text-ink"
         >
           {POLICY_LINKS.map((link) => (
-            <Link key={link.href} href={link.href} className="hover:text-clay">
+            <Link
+              key={link.href}
+              href={link.href}
+              className="hover:text-sage-dark"
+            >
               {link.label}
             </Link>
           ))}

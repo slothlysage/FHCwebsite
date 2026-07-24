@@ -1,28 +1,32 @@
 @import "tailwindcss";
 
 /*
- * Placeholder brand palette — warm, handmade-goods neutrals with a terracotta
- * accent. Swap these values once real brand colors/logo are supplied (see
- * fix_plan.md "Blocked — needs human"); everything else in the shell is built
- * against the semantic names below, not the hex values, so the swap is a
+ * Brand palette — sage green + lavender purple, grounded with warm neutral
+ * tones (cream/sand). Owner-supplied 2026-07-23, replacing the terracotta
+ * placeholder. `sage`/`sage-dark` carry nav and secondary accents; `lavender`/
+ * `lavender-dark` carry primary CTAs and price/status text; `cream`/`sand`
+ * stay the warm-neutral base. Everything else in the shell is built against
+ * these semantic names, not the hex values, so further tuning stays a
  * one-file change.
  */
 :root {
-  --color-cream: #faf6f0;
-  --color-ink: #2b2420;
-  --color-clay: #c1694f;
-  --color-clay-dark: #a8523c;
-  --color-sage: #8a9a80;
-  --color-sand: #ede4d3;
+  --color-cream: #f8f5ee;
+  --color-ink: #2e2b26;
+  --color-sand: #e9e0cc;
+  --color-sage: #7c9070;
+  --color-sage-dark: #5c6f52;
+  --color-lavender: #6a5a90;
+  --color-lavender-dark: #52426f;
 }
 
 @theme inline {
   --color-cream: var(--color-cream);
   --color-ink: var(--color-ink);
-  --color-clay: var(--color-clay);
-  --color-clay-dark: var(--color-clay-dark);
-  --color-sage: var(--color-sage);
   --color-sand: var(--color-sand);
+  --color-sage: var(--color-sage);
+  --color-sage-dark: var(--color-sage-dark);
+  --color-lavender: var(--color-lavender);
+  --color-lavender-dark: var(--color-lavender-dark);
   --color-background: var(--color-cream);
   --color-foreground: var(--color-ink);
   --font-sans: var(--font-geist-sans);

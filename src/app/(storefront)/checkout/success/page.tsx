@@ -62,7 +62,7 @@ export default async function CheckoutSuccessPage({
                 {item.variantNameSnapshot} × {item.quantity}
               </p>
               {item.oversoldQuantity > 0 && (
-                <p className="text-xs text-clay-dark">Made to order</p>
+                <p className="text-xs text-lavender-dark">Made to order</p>
               )}
             </div>
             <p className="text-sm font-medium text-ink">
@@ -99,7 +99,7 @@ export default async function CheckoutSuccessPage({
 
       <Link
         href="/products"
-        className="mt-8 inline-block underline hover:text-clay"
+        className="mt-8 inline-block underline hover:text-sage-dark"
       >
         Continue shopping
       </Link>

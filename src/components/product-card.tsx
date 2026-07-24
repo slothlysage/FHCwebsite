@@ -32,7 +32,7 @@ export function ProductCard({ product }: { product: ProductListingItem }) {
             <span className="text-ink/60">Made to order</span>
           )}
           {!product.inStock && !product.purchasable && (
-            <span className="text-clay-dark font-medium">Out of stock</span>
+            <span className="text-lavender-dark font-medium">Out of stock</span>
           )}
         </div>
       </Link>

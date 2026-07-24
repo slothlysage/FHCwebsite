@@ -276,7 +276,7 @@ export function ProductFiltersForm({
 
           <button
             type="submit"
-            className="rounded-md bg-clay px-4 py-2 text-sm font-medium text-cream"
+            className="rounded-md bg-lavender px-4 py-2 text-sm font-medium text-cream"
           >
             Apply filters
           </button>

@@ -2219,7 +2219,7 @@ true`) variant being oversold is expected/legal (1.7) and does not flag
       4.6" (ended up needed here, feeding both this page and the receipt
       email below).
       New `src/lib/services/receipt.ts` — pure `buildOrderReceiptEmail(order,
-    items)` (90%-floor services module, no db/network), returns
+items)` (90%-floor services module, no db/network), returns
       `{subject, html, text}`. Escapes snapshot text fields before
       interpolating into HTML (`escapeHtml`, hand-rolled — no templating
       engine dependency justified for four field types). Per 1.7's own NOTE
@@ -2619,12 +2619,33 @@ _(agent appends here; do not guess around a blocker)_
   sends will fail. Same category as the brand-assets entry above: not
   blocking to build against, blocking to actually send from once live.
 
-- Brand assets: logo, real color palette, product photography. 2.1 shipped
-  with a placeholder warm-neutral/terracotta palette (`src/app/globals.css`)
-  so the layout shell could be built and tested now — swapping in the owner's
-  actual palette/logo later is a one-file edit. Still needed before launch,
-  and definitely before 2.6 (OG images) and 5.4 (Lighthouse/LCP image) make
-  photography decisions load-bearing.
+- ~~Real color palette~~ RESOLVED 2026-07-23: owner supplied sage
+  green + lavender purple + warm neutral direction ("verdant landscape").
+  `src/app/globals.css` now carries `cream`/`ink`/`sand` (warm neutral),
+  `sage`/`sage-dark` (nav/secondary), `lavender`/`lavender-dark` (primary
+  CTAs, price/status text — renamed from the old `clay`/`clay-dark`
+  terracotta tokens, same call sites). Hardcoded hex in both
+  `opengraph-image.tsx` files updated to match. All hex values checked for
+  ≥4.5:1 text contrast against `cream`.
+- ~~Logo~~ RESOLVED 2026-07-23: owner uploaded three source photos to the
+  new R2 bucket (`FHC_logo.jpg`, `FHC_logo_2.jpg`, `FHC_logo_3.jpg` —
+  candle product shots with the "Fasthorse Creations" wordmark/"FC"
+  monogram composited on top). Extracted the standalone monogram+lavender-
+  sprig mark from `FHC_logo_2.jpg` via HSV-threshold background removal
+  (script not checked in — one-off, source photo lives in R2). Master
+  transparent asset at `public/brand/fc-mark.png` (1024×1024); generated
+  `src/app/favicon.ico` (16/32/48 multi-res), `src/app/icon.png` (512,
+  transparent), `src/app/apple-icon.png` (180, opaque cream background —
+  iOS flattens transparency to black otherwise). Wired into
+  `site-header.tsx` (mark + "FHC" text lockup, mark alt="" since the
+  adjacent text already carries the link's accessible name) and both
+  `opengraph-image.tsx` routes (mark inlined as a base64 data URI — satori
+  needs literal `<img src>` data, not a build-relative import). The
+  monogram reveals the full name "Fasthorse Creations"; site copy still
+  says "FHC" everywhere (title, nav, footer) — owner call whether to
+  expand it, not changed here.
+- Product photography still needed before 5.4 (Lighthouse/LCP image) makes
+  it load-bearing; OG images are otherwise done (mark + palette).
 - Policy copy: shipping, returns, privacy, terms — needed for 2.8.
 - Brand-story narrative copy ("About the maker" paragraph) for the home
   page — `specs/03-storefront.md`'s route table calls for it alongside

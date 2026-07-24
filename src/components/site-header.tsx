@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 
 import { readCartId } from "@/lib/cart-cookie";
@@ -28,16 +29,30 @@ export async function SiteHeader() {
       <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-6 gap-y-3 px-4 py-4 sm:px-6">
         <Link
           href="/"
-          className="text-lg font-semibold tracking-tight text-ink"
+          className="flex items-center gap-2 text-lg font-semibold tracking-tight text-ink"
         >
-          FHC
+          {/* Alt left empty: the adjacent text already gives the link its
+              accessible name, so the mark stays purely decorative. */}
+          <Image
+            src="/brand/fc-mark.png"
+            alt=""
+            width={32}
+            height={32}
+            className="h-8 w-8"
+            priority
+          />
+          Fasthorse Creations
         </Link>
         <nav
           aria-label="Main"
           className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm font-medium text-ink"
         >
           {NAV_LINKS.map((link) => (
-            <Link key={link.href} href={link.href} className="hover:text-clay">
+            <Link
+              key={link.href}
+              href={link.href}
+              className="hover:text-sage-dark"
+            >
               {link.label}
             </Link>
           ))}
@@ -45,12 +60,12 @@ export async function SiteHeader() {
         <Link
           href="/cart"
           aria-label={`Cart, ${cartItemCount} items`}
-          className="flex items-center gap-2 text-sm font-medium text-ink hover:text-clay"
+          className="flex items-center gap-2 text-sm font-medium text-ink hover:text-sage-dark"
         >
           <span aria-hidden="true">Cart</span>
           <span
             aria-hidden="true"
-            className="flex h-5 w-5 items-center justify-center rounded-full bg-clay text-xs font-semibold text-cream"
+            className="flex h-5 w-5 items-center justify-center rounded-full bg-lavender text-xs font-semibold text-cream"
           >
             {cartItemCount}
           </span>

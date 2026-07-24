@@ -19,13 +19,15 @@ export default async function Home() {
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6">
       <div className="py-12 text-center">
-        <h1 className="text-3xl font-semibold tracking-tight text-ink">FHC</h1>
+        <h1 className="text-3xl font-semibold tracking-tight text-ink">
+          Fasthorse Creations
+        </h1>
         <p className="mt-2 text-ink/70">
           Handmade candles, body butter, and self-care products.
         </p>
         <Link
           href="/products"
-          className="mt-6 inline-block rounded bg-clay px-6 py-3 text-sm font-medium text-cream hover:bg-clay-dark"
+          className="mt-6 inline-block rounded bg-lavender px-6 py-3 text-sm font-medium text-cream hover:bg-lavender-dark"
         >
           Shop all products
         </Link>

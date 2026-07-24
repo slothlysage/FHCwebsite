@@ -23,7 +23,9 @@ describe("Home", () => {
 
   it("renders the site heading and no longer says 'under construction'", async () => {
     render(await Home());
-    expect(screen.getByRole("heading", { name: "FHC" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Fasthorse Creations" }),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/under construction/i)).not.toBeInTheDocument();
   });
 

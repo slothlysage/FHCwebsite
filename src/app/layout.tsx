@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   metadataBase: new URL(env.NEXT_PUBLIC_SITE_URL),
-  title: "FHC",
+  title: "Fasthorse Creations",
   description: "Handmade candles, body butter, and self-care products.",
 };
 
