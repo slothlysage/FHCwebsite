@@ -18,6 +18,54 @@ login.
 - CSRF: double-submit token on every mutating request
 - Optional TOTP second factor — schema supports it; UI is v1.5
 
+### Implementation notes (4.1a — password hashing + login core)
+
+- **Argon2id via `hash-wasm`, not the native `argon2`/`@node-rs/argon2`
+  packages.** `specs/01-stack-and-hosting.md` targets Cloudflare Workers
+  (`@opennextjs/cloudflare`); Workers cannot load native N-API addons, only
+  JS/WASM. `hash-wasm` is a pure-WebAssembly implementation that runs
+  unchanged there. Params: `memorySize: 19456` KiB, `iterations: 2`,
+  `parallelism: 1` — meets the spec's `memoryCost >= 19456`/`timeCost >= 2`
+  floor (OWASP's paired recommendation for that memory/time combo is `p=1`).
+  `src/lib/auth/password.ts`.
+- **Storage format**: hash-wasm's own `outputType: "encoded"` PHC string
+  (`$argon2id$v=19$m=...,t=...,p=...$salt$hash`), stored as-is in
+  `admin_users.password_hash` — self-describing, so a future params change
+  doesn't invalidate already-hashed passwords (old rows still verify with
+  their own embedded params).
+- **Timing-safe comparison, not `argon2Verify`**: hash-wasm's built-in
+  `argon2Verify` re-hashes and compares the encoded strings with plain
+  `===`, which is not constant-time. `verifyPassword` instead parses the
+  salt/params out of the stored hash, re-derives a binary digest, and
+  compares with `node:crypto`'s `timingSafeEqual` (available under
+  `nodejs_compat`, `wrangler.jsonc`).
+- **User-enumeration timing**: a login attempt against an email that
+  doesn't exist still runs a full argon2id verify (against a fixed,
+  precomputed dummy hash, real params, never a real credential) before
+  returning `invalid_credentials` — so "no such user" and "wrong password"
+  take the same wall-clock time, not just the same message.
+  `src/lib/auth/login.ts`'s `DUMMY_HASH`.
+- **Rate limiting is stored per-account, not per-IP+email**, despite the
+  spec line above naming "IP+email" as the dimension: the schema's only
+  counters are `admin_users.failed_attempts`/`locked_until` (no separate
+  attempts-with-IP log table), and v1 has exactly one admin account, so
+  per-account and per-(IP+that one email) collapse to the same thing in
+  practice. `recordFailedLoginAttempt` does the increment-and-maybe-lock as
+  one atomic SQL `CASE` update (not read-then-write), so two concurrent
+  failed requests can't both read attempt 4 and neither trigger the lock —
+  same pattern as `discount-codes.ts`'s `incrementDiscountCodeUsage`.
+- **Expired-lock behavior**: once `locked_until` is in the past,
+  `attemptLogin` clears it (and resets `failed_attempts` to 0) _before_
+  evaluating the current attempt — so the account gets a fresh 5-attempt
+  window rather than re-locking on the very next single failure forever.
+  Not spelled out in the spec line above; this is the interpretation this
+  implementation commits to.
+- `src/lib/auth/login.ts`'s `attemptLogin(email, password)` returns
+  `{ok:true, adminUserId}` or `{ok:false, reason: "invalid_credentials" |
+"locked"}`. **Sessions, cookies, CSRF, and the actual login/logout HTTP
+  routes are 4.1b** — this module is credential-check only, no cookie or
+  request handling.
+
 ## Screens
 
 **Dashboard** — orders needing fulfillment, low-stock variants, last 30 days

@@ -2539,6 +2539,88 @@ code} | null`. `discount.ts` gained `DiscountRejectReason` (an
       Rate-limit login (5 attempts / 15 min / IP+email). CSRF tokens on all mutations.
       AC: wrong password, locked-out, expired-session, and CSRF-missing paths are
       each tested. Timing-safe comparison. Passwords never logged. Auth ≥90% covered.
+      Split into sub-tasks below (2026-07-23) — password hashing + the
+      credential-check/lockout core is pure service+repo work, independently
+      testable from session/cookie/CSRF/HTTP-route wiring, same rationale as
+      1.3's/1.4's/3.8's/4.7's splits. This umbrella item is ticked `[x]` only
+      once both below are `[x]`.
+
+  - [x] **4.1a Password hashing + login core** (2026-07-23)
+        Deps: 1.1. `src/lib/auth/password.ts` — `hashPassword`/
+        `verifyPassword`, Argon2id via `hash-wasm` (pure WASM, not the
+        native `argon2`/`@node-rs/argon2` packages — this app deploys to
+        Cloudflare Workers, which can't load native N-API addons; see
+        `specs/04-admin.md`'s new "Implementation notes (4.1a)" section for
+        full detail on this and every decision below). Params
+        `m=19456,t=2,p=1` (meets the spec's floor). Storage format is
+        hash-wasm's own self-describing PHC-encoded string. Comparison uses
+        `node:crypto`'s `timingSafeEqual` against re-derived digest bytes,
+        not hash-wasm's own `argon2Verify` (which compares encoded strings
+        with plain `===`, not constant-time).
+        `src/lib/repos/admin-users.ts` — `createAdminUser`,
+        `getAdminUserByEmail` (exact match, no case-insensitive index
+        exists on `admin_users.email`), `recordFailedLoginAttempt` (atomic
+        `failed_attempts + 1` with the lock decision as one SQL `CASE`, not
+        read-then-write — mirrors `discount-codes.ts`'s
+        `incrementDiscountCodeUsage`), `resetLoginAttempts` (success path),
+        `clearExpiredLock` (a past `locked_until` starts a fresh window).
+        `src/lib/auth/login.ts` — `attemptLogin(email, password)` →
+        `{ok:true, adminUserId} | {ok:false, reason: "invalid_credentials" |
+    "locked"}`. A fixed dummy argon2id hash is verified against on an
+        unknown email so that path costs the same wall-clock time as a
+        real wrong-password check (user-enumeration timing defense).
+        Sessions/cookies/CSRF/HTTP routes are explicitly out of scope — 4.1b.
+        Tests: `password.test.ts` (6 cases — round-trip, random-salt
+        non-determinism, correct/wrong password, malformed hash string
+        doesn't throw, empty password doesn't throw); `admin-users.test.ts`
+        (9 integration cases against the real dev database — create,
+        exact-match lookup, case-sensitivity, not-found, attempt below
+        threshold, attempt reaching threshold locks, concurrent attempts
+        via `Promise.all` land as exactly 3 not fewer, success resets
+        everything, expired-lock clear); `login.test.ts` (9 integration
+        cases — success, resets-on-success, wrong password, unknown email
+        gives the identical reason, attempt count increments, 5th failure
+        locks, a locked account is rejected without a password check,
+        expired lock allows login and resets the counter, a fresh single
+        failure after an expired lock does NOT immediately re-lock).
+        Confirmed every new test file red first (import-resolution error,
+        none of the three modules existed) before implementing.
+        AC met (the 4.1a slice of it): timing-safe comparison, passwords
+        never logged (no module here logs anything), wrong-password and
+        locked-out paths both tested. `npm run verify` green: 58 files, 494
+        tests, 97.93/93.74/99.61/97.87% coverage (global 80% floor and the
+        `src/lib/auth/**` 90% floor — pre-declared in `vitest.config.mts`
+        ahead of this task — both clear; `src/lib/auth/**` itself doesn't
+        appear in the uncovered-lines report at all), build passes.
+        Added `hash-wasm` (`^4.12.0`) as a dependency.
+        NOTE for 4.1b: no seed script exists yet to actually create the one
+        real `admin_users` row from `ADMIN_EMAIL`/`ADMIN_INITIAL_PASSWORD`
+        (`.env.example`) — `createAdminUser` here is repo-layer plumbing,
+        called directly by tests, not wired to a CLI. 4.1b (or a dedicated
+        seed task, if the umbrella needs a third split) should add that
+        wrapper: `hashPassword(ADMIN_INITIAL_PASSWORD)` +
+        `createAdminUser({email: ADMIN_EMAIL, passwordHash})`, run once.
+        NOTE for 4.1b: expired-session testing (the AC's "expired-session"
+        path) is a `sessions` table concern — untouched by this task, which
+        only has `admin_users`. Session issuance/expiry/rotation/revocation
+        is entirely 4.1b's scope.
+
+  - [ ] **4.1b Sessions + cookies + CSRF + login/logout routes**
+        Deps: 4.1a. `sessions` repo (create/find-by-token-hash/revoke,
+        expiry check), 32-random-byte session tokens (base64url, only the
+        SHA-256 hash stored per the spec — mirrors how `webhook_events`/
+        discount codes never store a raw secret either), `httpOnly`/
+        `Secure`/`SameSite=Lax`/`Path=/`/7-day cookie, rotated on every
+        login (revoke old + issue new, not reuse). CSRF: double-submit
+        token on every mutating request. Admin login/logout API routes
+        (or Server Actions — decide against how 4.2's route-protection
+        middleware wants to read the session) wiring `attemptLogin` (4.1a)
+        to actual cookie issuance. Seed-script wrapper for the one real
+        admin account (see 4.1a's NOTE above) belongs here unless split out.
+        AC (the remaining slice of 4.1's AC not covered by 4.1a):
+        expired-session and CSRF-missing paths are each tested; session
+        rotation on login is tested; server-side revocation actually
+        invalidates a cookie's session.
 
 - [ ] **4.2 Route protection**
       Deps: 4.1. Middleware guarding `/admin/**` and admin API routes.
