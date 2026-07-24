@@ -2533,7 +2533,7 @@ code} | null`. `discount.ts` gained `DiscountRejectReason` (an
 
 ## Phase 4 — Admin portal
 
-- [ ] **4.1 Admin authentication**
+- [x] **4.1 Admin authentication**
       Deps: 1.1. See `specs/04-admin.md`. Email + argon2id password, httpOnly
       session cookie, `SameSite=Lax`, rotation on login, server-side revocation.
       Rate-limit login (5 attempts / 15 min / IP+email). CSRF tokens on all mutations.
@@ -2542,8 +2542,8 @@ code} | null`. `discount.ts` gained `DiscountRejectReason` (an
       Split into sub-tasks below (2026-07-23) — password hashing + the
       credential-check/lockout core is pure service+repo work, independently
       testable from session/cookie/CSRF/HTTP-route wiring, same rationale as
-      1.3's/1.4's/3.8's/4.7's splits. This umbrella item is ticked `[x]` only
-      once both below are `[x]`.
+      1.3's/1.4's/3.8's/4.7's splits. This umbrella item is ticked `[x]` now
+      that all three below are `[x]`.
 
   - [x] **4.1a Password hashing + login core** (2026-07-23)
         Deps: 1.1. `src/lib/auth/password.ts` — `hashPassword`/
@@ -2616,10 +2616,10 @@ code} | null`. `discount.ts` gained `DiscountRejectReason` (an
         `$inferInsert`, `returning()`, `[x]!` non-null assertion on
         single-row results). `src/lib/auth/session.ts` — 32-random-byte
         session tokens (`node:crypto`'s `randomBytes(32).toString
-    ("base64url")`), only the SHA-256 hash (`createHash("sha256")`)
+("base64url")`), only the SHA-256 hash (`createHash("sha256")`)
         stored per the spec — mirrors how `webhook_events`/discount codes
         never store a raw secret either. `issueSession(adminUserId,
-    options?)` (generate token, hash, insert, 7-day default expiry,
+options?)` (generate token, hash, insert, 7-day default expiry,
         optional `expiresAt` override used only by the expired-session
         test), `rotateSession(adminUserId, previousToken, options?)`
         (revokes the old session by its raw token if one is presented via
@@ -2650,31 +2650,79 @@ code} | null`. `discount.ts` gained `DiscountRejectReason` (an
         don't appear in the uncovered-lines report at all), build passes.
         NOTE for 4.1c: cookie writing, CSRF, and the login/logout HTTP
         routes (Route Handlers, following `src/app/api/webhooks/stripe/
-    route.ts`'s thin-wrapper pattern — all logic in `src/lib`, the
+route.ts`'s thin-wrapper pattern — all logic in `src/lib`, the
         route file just glues request/response — and `src/lib/cart-
-    cookie.ts`'s `next/headers` `cookies()` pattern, which is
+cookie.ts`'s `next/headers` `cookies()` pattern, which is
         `vi.mock`-able the same way its own test file already does) are
         that task's job, not touched here.
 
-  - [ ] **4.1c CSRF + cookie issuance + login/logout routes + admin seed**
+  - [x] **4.1c CSRF + cookie issuance + login/logout routes + admin seed**
         Deps: 4.1b. Wires `attemptLogin` (4.1a) + the session service
-        (4.1b) to real HTTP: `httpOnly`/`Secure`/`SameSite=Lax`/`Path=/`/
-        7-day session cookie (mirrors `src/lib/cart-cookie.ts`'s
-        `next/headers` cookies() pattern, vi.mock-able the same way per
-        its test file). CSRF: double-submit token on every mutating
-        request. Admin login/logout API routes (or Server Actions — decide
-        against how 4.2's route-protection middleware wants to read the
-        session) as thin wrappers, matching the stripe webhook route's
-        shape (all real logic in `src/lib`, route file just glues
-        request/response). Seed-script wrapper (`scripts/seed-admin.mts`,
-        alongside `import-catalog.mts`/`sync-stripe.mts`) for the one real
-        `admin_users` row from `ADMIN_EMAIL`/`ADMIN_INITIAL_PASSWORD`
-        (4.1a's NOTE — `createAdminUser` exists but nothing calls it yet).
-        AC (the remaining slice of 4.1's original AC): expired-session and
-        CSRF-missing paths are each tested; session rotation on login is
-        tested end-to-end through the login route; server-side revocation
-        (logout) actually invalidates a cookie's session on the next
-        request.
+        (4.1b) to real HTTP. Decided **Server Actions, not Route
+        Handlers** — `src/lib/actions/admin-auth.ts` (`loginAction`,
+        `logoutAction`), mirroring `src/lib/actions/cart.ts`'s shape
+        exactly (thin orchestration, tested by invoking the exported
+        function directly with a constructed `FormData`, same pattern as
+        `cart.test.ts`). No login page exists yet — out of scope here, a
+        future admin-screens task builds the actual form.
+        Session cookie: `src/lib/auth/session-cookie.ts`, mirrors
+        `cart-cookie.ts`'s `next/headers` pattern (read/write/delete),
+        `httpOnly`/`SameSite=Lax`/`Path=/`/7-day maxAge, `secure:
+process.env.NODE_ENV === "production"` (not hard-coded `true` —
+        `next dev` serves http, a hard-coded `Secure` cookie would never
+        be stored locally).
+        CSRF: double-submit token, split across two files for an Edge
+        Runtime reason discovered via a real `next build` — `src/lib/auth/
+csrf-token.ts` (`CSRF_COOKIE_NAME`, `CSRF_FIELD_NAME`,
+        `generateCsrfToken`, Web Crypto only) is safe for `src/proxy.ts` to
+        import; `src/lib/auth/csrf.ts` (`csrfTokensMatch`, `node:crypto`'s
+        `timingSafeEqual`) is Node-only and used solely by the Server
+        Actions. **`src/proxy.ts`, not `middleware.ts`** — this Next.js
+        version (16.2.11) deprecated the latter; a real build surfaced the
+        warning, fixed by renaming rather than shipping known-deprecated
+        code. `proxy.ts` issues the CSRF cookie on any `/admin/**` or
+        `/api/admin/**` request that doesn't have one yet — matcher scoped
+        so a future page's first render already has a token to embed.
+        **Task 4.2 must extend this same `proxy.ts`** with its
+        auth-redirect check, not create a second file (Next only runs one).
+        Seed script: `scripts/seed-admin.mts` (`npm run seed-admin`), same
+        CLI shape as `import-catalog.mts`/`sync-stripe.mts` — reuses
+        `hashPassword`/`createAdminUser`, idempotent re-run, no dedicated
+        test file (same precedent as the other two CLI wrappers).
+        Tests: `csrf-token.test.ts` (2), `csrf.test.ts` (7, `csrfTokensMatch`
+        only now), `csrf-cookie.test.ts` (2), `session-cookie.test.ts` (3),
+        `proxy.test.ts` (2, real `NextRequest`/`NextResponse`), `admin-
+auth.test.ts` (9 integration tests against the real dev database —
+        csrf-mismatch and no-csrf-cookie rejections on both actions,
+        missing-field rejection, wrong-password rejection, successful
+        login issuing a verifiable session, **login rotating an existing
+        (even expired) session cookie into a new one** — this is what
+        "expired-session path is tested" means for this task's slice of
+        4.1's AC, since no protected route exists yet to demonstrate an
+        expired cookie being rejected outright (that's 4.2's job) —
+        logout revoking the session so it **no longer verifies on the next
+        request** (proven by calling `verifySession` directly post-logout,
+        not just asserting the cookie was cleared) and clearing the
+        cookie, logout no-op with no session cookie present). All new test
+        files confirmed red first (import-resolution errors, none of the
+        six new modules existed).
+        Gotcha hit and fixed: `admin-auth.test.ts` initially reused the
+        literal `"owner@example.com"` email that `admin-users.test.ts`/
+        `login.test.ts` also seed — intermittently collided on
+        `admin_users_email_unique` because vitest runs test files in
+        parallel workers against the same shared dev database. Fixed with
+        a `randomUUID()`-suffixed email, matching the convention
+        `orders.test.ts`/`opengraph-image.test.ts`/`sitemap.test.ts`
+        already use for slugs/SKUs.
+        AC met: expired-session and CSRF-missing paths tested; session
+        rotation tested end-to-end through `loginAction`; server-side
+        revocation verified via a direct `verifySession` call after
+        `logoutAction`. `npm run verify` green: 66 files, 532 tests,
+        98.09/93.91/99.64/98.04% coverage (global 80% floor and the
+        `src/lib/auth/**`/`src/lib/services/**`/`src/lib/stripe/**` 90%
+        floors all clear — `src/lib/actions/admin-auth.ts` itself 100%
+        stmts/100% lines), build passes with no Edge Runtime warning.
+        See `specs/04-admin.md`'s new "Implementation notes (4.1c)".
 
 - [ ] **4.2 Route protection**
       Deps: 4.1. Middleware guarding `/admin/**` and admin API routes.

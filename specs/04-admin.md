@@ -66,6 +66,75 @@ login.
   routes are 4.1b** — this module is credential-check only, no cookie or
   request handling.
 
+### Implementation notes (4.1c — CSRF + cookies + login/logout + admin seed)
+
+- **Login/logout are Server Actions, not Route Handlers**: `src/lib/actions/
+admin-auth.ts` (`loginAction`, `logoutAction`), mirroring `src/lib/
+actions/cart.ts`'s shape exactly — thin orchestration, all real logic in
+  `src/lib/auth/**`. No login page exists yet (out of scope for this task;
+  a future admin-screens task builds the actual `<form>`); these actions
+  are tested by invoking them directly with a constructed `FormData`, the
+  same pattern `cart.test.ts` established.
+- **CSRF token generation lives in `src/lib/auth/csrf-token.ts`, not
+  `csrf.ts`**: `src/proxy.ts` (see below) imports `generateCsrfToken` and
+  runs in Next's Edge Runtime, which does not support `node:crypto` — a
+  real `next build` flagged this the first time `generateCsrfToken` lived
+  in the same file as `csrfTokensMatch` (which needs `node:crypto`'s
+  `timingSafeEqual` for the constant-time comparison). `csrf-token.ts` uses
+  only Web Crypto (`crypto.getRandomValues`) + `btoa`, portable across the
+  Edge Runtime, Node, and Cloudflare Workers. `csrf.ts` keeps
+  `csrfTokensMatch` (Node-only, used solely by the Server Actions, never by
+  `proxy.ts`). Any future file reachable from `proxy.ts`'s import graph
+  needs the same split if it wants a Node-only API.
+- **`src/proxy.ts`, not `src/middleware.ts`**: this Next.js version
+  (16.2.11) deprecated the `middleware.ts` file convention in favor of
+  `proxy.ts` (same signature, exported function renamed `middleware` →
+  `proxy`) — confirmed via a real build showing the deprecation warning,
+  fixed by renaming rather than leaving known-deprecated code in a fresh
+  codebase. Its only job so far is issuing the CSRF cookie
+  (`CSRF_COOKIE_NAME`, `csrf-token.ts`) when a request to `/admin/**` or
+  `/api/admin/**` doesn't already have one — this is what lets the _first_
+  page render (before any form has ever been submitted) already have a
+  token available to embed in a hidden field once a real login page exists.
+  **Task 4.2 (route protection) extends this same file** with the
+  auth-redirect check, rather than creating a second one — Next.js only
+  runs a single `proxy.ts`/`middleware.ts` per app.
+- **Session cookie**: `src/lib/auth/session-cookie.ts` mirrors `src/lib/
+cart-cookie.ts`'s `next/headers` read/write/(now also delete, for
+  logout) pattern exactly, same mocking strategy in tests. `secure` is
+  `process.env.NODE_ENV === "production"`, not the spec's literal always-on
+  `Secure` — `next dev` serves plain http locally and a hard-coded `Secure`
+  cookie would silently never be stored by the browser, breaking local
+  login entirely. Next sets `NODE_ENV` automatically for `dev`/`build`, so
+  this needs no env var of its own.
+  Session rotation on login revokes whatever token the browser presented
+  (if any) **regardless of whether it was still valid** — `rotateSession`
+  looks the old token up by hash and revokes it unconditionally, so an
+  expired-but-present session cookie doesn't error the login flow, it's
+  just silently replaced. This is what "expired-session path is tested"
+  means for this task's slice of the original 4.1 AC (`admin-auth.test.ts`,
+  "rotates an existing (even expired) session cookie into a new one on
+  login") — a dedicated "check my own session" endpoint that would
+  demonstrate an expired cookie being rejected on a _protected_ route
+  doesn't exist yet; that's 4.2's job once there's a route to protect.
+- **Admin seed script**: `scripts/seed-admin.mts` (`npm run seed-admin`),
+  same CLI shape as `import-catalog.mts`/`sync-stripe.mts` — reuses
+  `hashPassword`/`createAdminUser` rather than reimplementing, idempotent
+  (a second run against an already-seeded `ADMIN_EMAIL` is a no-op, not an
+  error). No dedicated test file, same precedent as the other two CLI
+  wrappers — the underlying service/repo functions are already covered,
+  and `tests/unit/ci-config.test.ts` catches a script/`package.json`
+  mismatch generically.
+- **Test-email collision gotcha**: `admin-users.test.ts`/`login.test.ts`
+  both seed a literal `"owner@example.com"` row; `admin-auth.test.ts`
+  originally did too and intermittently hit `admin_users_email_unique`
+  because vitest runs test files in separate parallel workers against the
+  same shared dev database. Fixed by generating a unique email per test run
+  (`` `owner-${randomUUID()}@example.com` ``, matching the `randomUUID()`
+  convention `orders.test.ts`/`opengraph-image.test.ts`/`sitemap.test.ts`
+  already use for slugs/SKUs). Any future admin-auth test file should do
+  the same rather than reusing a fixed email literal.
+
 ## Screens
 
 **Dashboard** — orders needing fulfillment, low-stock variants, last 30 days

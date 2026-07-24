@@ -17,6 +17,7 @@
     "db:reset": "node --env-file=.env.local scripts/db-reset.mjs",
     "import-catalog": "tsx --env-file=.env.local scripts/import-catalog.mts",
     "sync-stripe": "tsx --env-file=.env.local scripts/sync-stripe.mts",
+    "seed-admin": "tsx --env-file=.env.local scripts/seed-admin.mts",
     "test": "node --env-file=.env.local node_modules/.bin/vitest run",
     "test:coverage": "node --env-file=.env.local node_modules/.bin/vitest run --coverage",
     "verify": "npm run lint && npm run typecheck && npm run test:coverage && npm run build",
