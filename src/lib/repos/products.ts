@@ -5,9 +5,11 @@ import {
   eq,
   exists,
   gte,
+  ilike,
   inArray,
   isNull,
   lte,
+  or,
   sql,
   type SQL,
 } from "drizzle-orm";
@@ -54,6 +56,10 @@ export async function getProductBySlug(
 export async function listProducts(options?: {
   status?: ProductStatus;
   includeDeleted?: boolean;
+  // Admin products-list search (4.3b): matches a case-insensitive substring
+  // of either the product name or any of its variants' SKUs — a shop owner
+  // looking a product up rarely knows which of the two they have on hand.
+  search?: string;
 }): Promise<Product[]> {
   const conditions = [];
   if (options?.status) {
@@ -61,6 +67,25 @@ export async function listProducts(options?: {
   }
   if (!options?.includeDeleted) {
     conditions.push(isNull(products.deletedAt));
+  }
+  if (options?.search) {
+    const pattern = `%${options.search}%`;
+    conditions.push(
+      or(
+        ilike(products.name, pattern),
+        exists(
+          db
+            .select({ one: sql`1` })
+            .from(productVariants)
+            .where(
+              and(
+                eq(productVariants.productId, products.id),
+                ilike(productVariants.sku, pattern),
+              ),
+            ),
+        ),
+      ),
+    );
   }
 
   return db

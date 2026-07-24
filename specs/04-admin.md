@@ -273,6 +273,26 @@ block the order/webhook transaction that triggered it, matching the
   products repo) and is server-only, same as any other `src/lib/services/**`
   module.
 
+### Implementation notes (4.3b — admin products list page)
+
+- **Search matches name OR any variant SKU**, not just name. `src/lib/repos/
+products.ts`'s `listProducts` gained a `search` option: a case-insensitive
+  substring match against `products.name`, OR-ed with an EXISTS subquery
+  matching any of the product's variants' SKUs — an owner looking a product
+  up on this screen rarely knows which of the two they have on hand.
+- **`listVariantsByProductIds` (`src/lib/repos/variants.ts`) returns every
+  variant, active or not** — deliberately a new function rather than an
+  overload of the existing `listActiveVariantsByProductIds` (3.2b's Stripe
+  sync scope), since this list needs to show every SKU a product has, not
+  just its currently-sellable ones.
+- **No pagination/sort/facets in `admin-product-filters.ts`**, unlike the
+  storefront's `product-filters.ts` — this is a small, single-owner catalog
+  list, not a public crawlable page. Status enum values are read off
+  `productStatus.enumValues` (schema.ts) rather than re-listed.
+- **No edit/detail links yet** — 4.3c (create/edit form) isn't built, so
+  each row is plain text for now. No shared admin layout/nav either; the
+  page stands alone, same precedent as 4.2a's login page.
+
 ## Rules
 
 - Every mutation writes an `audit_log` row with before/after JSON.

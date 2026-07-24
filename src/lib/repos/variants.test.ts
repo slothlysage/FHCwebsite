@@ -13,6 +13,7 @@ import {
   listActiveVariantsByProductIds,
   listActiveVariantsOfPublishedProducts,
   listVariantsByProductId,
+  listVariantsByProductIds,
   updateVariant,
 } from "@/lib/repos/variants";
 
@@ -180,6 +181,54 @@ describe("variants repo", () => {
 
   it("returns an empty map for an empty id list", async () => {
     const listed = await listActiveVariantsByProductIds([]);
+    expect(listed.size).toBe(0);
+  });
+
+  it("batch-lists every variant across multiple products, including deactivated ones", async () => {
+    const productA = await makeProduct("test-variant-batch-all-a");
+    const productB = await makeProduct("test-variant-batch-all-b");
+    const productC = await makeProduct("test-variant-batch-all-c");
+    const aActive = await createVariant({
+      productId: productA.id,
+      sku: "TEST-BATCH-ALL-A-ACTIVE",
+      name: "A Active",
+      priceCents: 1000,
+      weightGrams: 100,
+    });
+    const aInactive = await createVariant({
+      productId: productA.id,
+      sku: "TEST-BATCH-ALL-A-INACTIVE",
+      name: "A Inactive",
+      priceCents: 1000,
+      weightGrams: 100,
+    });
+    await deactivateVariant(aInactive.id);
+    const bActive = await createVariant({
+      productId: productB.id,
+      sku: "TEST-BATCH-ALL-B-ACTIVE",
+      name: "B Active",
+      priceCents: 2000,
+      weightGrams: 200,
+    });
+
+    const listed = await listVariantsByProductIds([
+      productA.id,
+      productB.id,
+      productC.id,
+    ]);
+
+    expect(
+      listed
+        .get(productA.id)
+        ?.map((v) => v.id)
+        .sort(),
+    ).toEqual([aActive.id, aInactive.id].sort());
+    expect(listed.get(productB.id)?.map((v) => v.id)).toEqual([bActive.id]);
+    expect(listed.has(productC.id)).toBe(false);
+  });
+
+  it("returns an empty map for an empty id list (all-variants batch)", async () => {
+    const listed = await listVariantsByProductIds([]);
     expect(listed.size).toBe(0);
   });
 

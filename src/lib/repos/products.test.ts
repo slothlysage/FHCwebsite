@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -32,6 +34,7 @@ describe("products repo", () => {
 
   afterEach(async () => {
     for (const id of insertedIds.splice(0)) {
+      await db.delete(productVariants).where(eq(productVariants.productId, id));
       await db.delete(products).where(eq(products.id, id));
     }
   });
@@ -155,6 +158,83 @@ describe("products repo", () => {
     const listedIds = listed.map((p) => p.id);
 
     expect(listedIds).toContain(deleted.id);
+  });
+
+  it("searches by a case-insensitive substring of the product name", async () => {
+    const match = await createProduct({
+      slug: "test-search-name-match",
+      name: `Lavender Body Butter ${randomUUID()}`,
+    });
+    insertedIds.push(match.id);
+    const nonMatch = await createProduct({
+      slug: "test-search-name-nonmatch",
+      name: `Rosemary Soap ${randomUUID()}`,
+    });
+    insertedIds.push(nonMatch.id);
+
+    const listed = await listProducts({ search: "lavender body" });
+    const listedIds = listed.map((p) => p.id);
+
+    expect(listedIds).toContain(match.id);
+    expect(listedIds).not.toContain(nonMatch.id);
+  });
+
+  it("searches by an exact variant SKU regardless of product name", async () => {
+    const sku = `TEST-SKU-${randomUUID()}`;
+    const match = await createProduct({
+      slug: "test-search-sku-match",
+      name: "Unrelated Name",
+    });
+    insertedIds.push(match.id);
+    await createVariant({
+      productId: match.id,
+      sku,
+      name: "Default",
+      priceCents: 1000,
+      weightGrams: 100,
+    });
+    const nonMatch = await createProduct({
+      slug: "test-search-sku-nonmatch",
+      name: "Also Unrelated",
+    });
+    insertedIds.push(nonMatch.id);
+
+    const listed = await listProducts({ search: sku });
+    const listedIds = listed.map((p) => p.id);
+
+    expect(listedIds).toContain(match.id);
+    expect(listedIds).not.toContain(nonMatch.id);
+  });
+
+  it("returns no rows when the search matches neither name nor sku", async () => {
+    const listed = await listProducts({
+      search: `no-such-thing-${randomUUID()}`,
+    });
+    expect(listed).toEqual([]);
+  });
+
+  it("combines search with a status filter", async () => {
+    const draftMatch = await createProduct({
+      slug: "test-search-status-draft",
+      name: `Combo Search Term ${randomUUID()}`,
+      status: "draft",
+    });
+    insertedIds.push(draftMatch.id);
+    const publishedMatch = await createProduct({
+      slug: "test-search-status-published",
+      name: `Combo Search Term ${randomUUID()}`,
+      status: "published",
+    });
+    insertedIds.push(publishedMatch.id);
+
+    const listed = await listProducts({
+      search: "Combo Search Term",
+      status: "published",
+    });
+    const listedIds = listed.map((p) => p.id);
+
+    expect(listedIds).toContain(publishedMatch.id);
+    expect(listedIds).not.toContain(draftMatch.id);
   });
 
   it("updates a product's fields", async () => {

@@ -93,6 +93,34 @@ export async function listActiveVariantsByProductIds(
   return variantsByProduct;
 }
 
+// Batch form of listVariantsByProductId (every variant, active or not) — for
+// the admin products list (4.3b), which needs to show every SKU a product
+// has, not just its currently-sellable ones.
+export async function listVariantsByProductIds(
+  productIds: string[],
+): Promise<Map<string, Variant[]>> {
+  const variantsByProduct = new Map<string, Variant[]>();
+  if (productIds.length === 0) {
+    return variantsByProduct;
+  }
+
+  const rows = await db
+    .select()
+    .from(productVariants)
+    .where(inArray(productVariants.productId, productIds));
+
+  for (const row of rows) {
+    const existing = variantsByProduct.get(row.productId);
+    if (existing) {
+      existing.push(row);
+    } else {
+      variantsByProduct.set(row.productId, [row]);
+    }
+  }
+
+  return variantsByProduct;
+}
+
 // Active variants of published, non-deleted products only — the exact scope
 // Stripe catalog sync (3.2b) syncs. Carries the product name alongside each
 // variant since Stripe's Product display name is derived from it

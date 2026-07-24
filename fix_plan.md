@@ -2848,7 +2848,7 @@ auth.test.ts` (9 integration tests against the real dev database —
       assuming "a future admin-screens task" would — discovered while
       closing 4.2. `src/app/admin/login/page.tsx`: a plain async Server
       Component form (email, password, `export const dynamic =
-  "force-dynamic"` — reads the csrf cookie, same rationale as the cart
+"force-dynamic"` — reads the csrf cookie, same rationale as the cart
       page's own explicit export) posting straight to `loginAction`, with a
       hidden `csrfToken` field populated from `readCsrfCookie()`
       (`proxy.ts` already issues that cookie on every `/admin/**` request).
@@ -2901,7 +2901,7 @@ auth.test.ts` (9 integration tests against the real dev database —
       `loginAction` to set up a session) needed the same fix.
       AC met, verified live: `npm run verify` green (74 files, 576 tests,
       98.16/94.14/99.65/98.11% coverage, build's route table shows `ƒ
-  /admin/login`). Then a real `next dev` + Playwright (already cached
+/admin/login`). Then a real `next dev` + Playwright (already cached
       from 2.1, `~/.cache/ms-playwright`) drove an actual browser: seeded
       the one real admin user via `npm run seed-admin` (`ADMIN_EMAIL`/
       `ADMIN_INITIAL_PASSWORD` were already in `.env.local`, previously
@@ -2981,10 +2981,69 @@ auth.test.ts` (9 integration tests against the real dev database —
         note about deciding where combined editing lives once 4.4/4.5 are
         in scope.
 
-  - [ ] **4.3b Admin products list page**
+  - [x] **4.3b Admin products list page** (2026-07-24)
         Deps: 4.3a. `src/app/admin/products/page.tsx` — table with search
         (name/SKU) and status filter, per `specs/04-admin.md`'s Screens
         section. Read-only for now; bulk publish/unpublish lands with 4.3d.
+        `src/lib/repos/products.ts`'s `listProducts` gained a `search`
+        option (case-insensitive substring match against the product name,
+        OR-ed with an EXISTS-subquery match against any of the product's
+        variant SKUs — an owner rarely knows which of the two they have on
+        hand) — extending the existing function rather than adding a
+        sibling, since it already had `status`/`includeDeleted` and no
+        non-test call site yet. `src/lib/repos/variants.ts` gained
+        `listVariantsByProductIds` (batch, all variants including inactive
+        ones) — a new function, not a `listActiveVariantsByProductIds`
+        overload, since the admin list needs every SKU a product has, not
+        just its currently-sellable ones.
+        `src/lib/validation/admin-product-filters.ts` —
+        `parseAdminProductFilters(raw)`, mirroring `product-filters.ts`'s
+        permissive-parsing shape (unknown/blank values dropped, never a 500) but deliberately without pagination/sort/facets — this is a
+        small, single-owner catalog list, not a public crawlable page.
+        Status enum values are read off `productStatus.enumValues`
+        (schema.ts) rather than re-listing `["draft","published","archived"]`
+        a second time.
+        `src/lib/services/admin-product-listing.ts` —
+        `listAdminProducts(filters)`: one `listProducts` query plus one
+        batch `listVariantsByProductIds` lookup, same "products query then
+        one batch related-data query" shape as `getFilteredProductListing`.
+        The page itself has no edit/detail links yet (4.3c isn't built), a
+        plain GET `<form>` (no client JS needed for a read-only filter,
+        unlike the storefront's instant multi-facet UI), and no shared
+        admin layout/nav (out of scope here, matches 4.2a's login page
+        precedent of a standalone page).
+        Tests: 5 new `listProducts` search cases (name substring, SKU
+        exact, no-match, search+status combo) in the existing
+        `products.test.ts`; 2 new `listVariantsByProductIds` cases in the
+        existing `variants.test.ts`; new `admin-product-filters.test.ts` (6
+        cases); new `admin-product-listing.test.ts` (4 integration cases);
+        new `page.test.tsx` (6 cases: labeled fields, matching row's
+        name/SKU/status, search exclusion, status-filter exclusion, empty
+        state, zero axe violations). All confirmed red first (missing
+        `search`/`listVariantsByProductIds`/module-not-found) before
+        implementing.
+        NOTE: the `products repo` describe block's shared `afterEach` in
+        `products.test.ts` only deleted from `products` by id, not
+        `product_variants` first — harmless until a test in that block
+        created a variant (this task's SKU-search case is the first). Fixed
+        by deleting variants-then-product in that `afterEach`, matching the
+        `listPublishedProductsFiltered` describe block's own pattern lower
+        in the same file. Also had to manually clean up two stale rows
+        left behind by this task's own first (pre-fix) red/green cycle
+        against the shared dev DB (`test-search-sku-match`,
+        `test-search-sku-nonmatch`) — a leftover-row risk any future test
+        in this describe block that inserts a variant should keep in mind.
+        AC met: `npm run verify` green — 80 files, 619 tests,
+        98.24/94.43/99.67/98.19% coverage (global 80% floor and the 90%
+        `src/lib/services`/`src/lib/stripe` floors both clear), build
+        passes (`ƒ /admin/products` in the route table). Verified live via
+        `next dev` + curl: an unauthenticated request to `/admin/products`
+        307-redirects to `/admin/login` (route protection, 4.2, still
+        applies to the new route) — the page's own rendering is covered by
+        the integration tests above, which invoke it directly the same way
+        `products/page.test.tsx`/the admin login page's test do, since
+        there's no seeded admin password on hand to drive a real browser
+        login in this sandbox.
 
   - [ ] **4.3c Product create/edit form + actions**
         Deps: 4.3a, 4.3b. Create and edit screens using 4.3a's shared
