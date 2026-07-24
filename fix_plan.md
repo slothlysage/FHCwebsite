@@ -3463,11 +3463,95 @@ inventory.ts` at all — `stock` is never a column per `specs/
         nothing new to design there, just another value the timeline UI
         should render a human-readable line for.
 
-- [ ] **4.5 Image upload**
+- [ ] **4.5 Image upload** (split 2026-07-24 — mirrors 4.7's a/b umbrella
+      pattern; the combined task was three separable pieces: a pure
+      validation/processing service, an R2 network client, and the admin UI
+      wiring. This umbrella item is ticked `[x]` only once all three below are.)
       Deps: 4.3. Cloudflare R2 via presigned URLs. Validate MIME by magic bytes not
       extension, cap size, strip EXIF, generate responsive sizes, set alt text.
       AC: a `.png`-named file that is actually a script is rejected; alt text is
       required before publish.
+
+  - [x] **4.5a Image validation + processing service**
+        Deps: none (pure, no DB/network — mirrors publish-gate.ts's
+        "pure service, unit tested directly" pattern). `src/lib/services/
+image-upload.ts`: `processUploadedImage(buffer)` — caps size before doing
+        any parsing work, sniffs actual file bytes (magic numbers: PNG/JPEG/
+        WebP signatures) rather than trusting a filename/extension/claimed
+        MIME type, auto-orients from EXIF then strips all metadata (sharp
+        omits metadata by default unless `.withMetadata()` is called — the
+        auto-orient step must still run first or rotated originals come out
+        sideways), and produces responsive WebP sizes.
+        AC: a `.png`-named buffer containing script/text bytes is rejected
+        (`unrecognized_image_type`, not a filename check); an oversized
+        buffer is rejected before any image parsing is attempted; a valid
+        photo produces multiple correctly-capped, non-upscaled, EXIF-free
+        WebP sizes. 90% floor (already inherited — `src/lib/services/**` in
+        `vitest.config.mts`).
+        **Done 2026-07-24.** `sharp` promoted from a transitive dep (already
+        pulled in by `next`'s `next/og` and `wrangler`'s `miniflare`) to a
+        direct `package.json` dependency, since app code now imports it
+        directly rather than relying on hoisting. Magic-byte sniffing is
+        hand-rolled (PNG/JPEG/WebP signature checks), not the `file-type`
+        npm package — avoids an ESM-interop dependency for ~15 lines of
+        deterministic byte comparison, same reasoning as this repo's other
+        "don't add a dependency for something this small" calls. Three fixed
+        responsive widths: `thumbnail` (400), `medium` (800), `large` (1600),
+        `withoutEnlargement: true` so a source smaller than a target never
+        upscales. Size cap: 10MB (`MAX_UPLOAD_BYTES`), checked before any
+        `sharp()` call — an oversized buffer never reaches the parser.
+        Defense in depth: a buffer can pass the magic-byte sniff (correct
+        header) but still fail `sharp().rotate().toBuffer()` if the body
+        past the header is corrupt/non-image — caught and downgraded to the
+        same `unrecognized_image_type` result, not an unhandled throw.
+        Per `feedback_sharp_pipeline_gotcha`, `rotate()` (EXIF auto-orient)
+        runs in its own `sharp()` instance with a `toBuffer()` boundary
+        before the resize/webp-encode step, rather than one long chain.
+        `npm run verify` green: 96 files, 736 tests (`image-upload.test.ts`
+        needs `// @vitest-environment node`, same as both
+        `opengraph-image.test.ts` files — sharp doesn't accept jsdom's
+        `Buffer` realm), 98.21/94.21/99.73/98.16% coverage.
+        **Not done yet (4.5b/4.5c):** nothing actually calls this function —
+        no R2 upload, no admin UI, no `product_images` row gets written from
+        a real upload. Also still using the local dev Postgres for
+        `npm run verify`: `docker compose up -d postgres` +
+        `npm run db:migrate` if a fresh sandbox has an unmigrated/stopped DB
+        — this iteration hit `ECONNREFUSED 127.0.0.1:5432` until both ran;
+        worth confirming whether CI already handles this or whether it's a
+        local-sandbox-only gap.
+
+  - [ ] **4.5b R2 storage client**
+        Deps: none (mirrors 4.7a's pattern: fetch-based client + presigned
+        upload/read, `ALLOW_LIVE`-style safety not needed since R2 has no
+        live/test mode split, but bucket/env misconfiguration should fail
+        loud). `src/lib/storage/r2.ts` — S3-compatible client (matches the
+        credentials already sitting unused in `.env.local`, see
+        `project_r2_storage` memory), presigned PUT URL generation, and a
+        `putObject`/`getObject` pair for the server-side re-upload step
+        4.5a's processed sizes need. **Verify sharp actually runs under the
+        real `wrangler dev`/workerd runtime, not just Vitest's Node
+        environment** — `next/og`'s `ImageResponse` already depends on sharp
+        at OG-image request time (`specs/03-storefront.md`'s vitest gotcha
+        note) so there's working precedent, but sharp ships native
+        `libvips` bindings and workerd has no native-addon support; if it
+        turns out OG images are silently falling back to something else in
+        production, 4.5a's processing step needs to move somewhere with a
+        real Node runtime (a scheduled worker isn't it either — same
+        constraint) rather than assuming parity with local dev tests. This is
+        a real open risk, not a formality — check it before 4.5c ships.
+
+  - [ ] **4.5c Admin UI + upload wiring**
+        Deps: 4.5a, 4.5b, 4.3 (product edit page). Product edit page gains an
+        image manager: file input(s), per-image alt text field (required),
+        drag-to-reorder position, delete. Server action: receives the raw
+        upload, runs it through 4.5a, stores the resulting sizes via 4.5b,
+        calls the existing `replaceProductImages` repo function. Publish gate
+        (`product-publish-gate.ts`) already enforces "at least one image with
+        alt text" — no change needed there, just wiring a UI path that can
+        actually produce that state.
+        AC: uploading a disguised-script `.png` shows a rejection message and
+        writes no `product_images` row; a product with an image missing alt
+        text cannot be published (already-passing gate, now reachable via UI).
 
 - [ ] **4.6 Orders dashboard**
       Deps: 3.5, 4.2. List with status filter and search; detail view with items,

@@ -355,3 +355,61 @@ inventory_movements GROUP BY variant_id`. A plain view recomputes on every
   unconditionally whenever `apply && product`, in the same unconditional
   block as `replaceProductImages` — attributes, like images, aren't part of
   the product/variant `create`/`update`/`unchanged` diff classification.
+
+## Implementation notes (4.5a — image validation + processing service)
+
+`src/lib/services/image-upload.ts`'s `processUploadedImage(buffer)` is the
+half of 4.5 that decides whether an uploaded buffer is real, safe, and what
+sizes get written to `product_images.width`/`height` (currently `0`/`0`
+placeholders from the CSV importer — see the 1.4b note above; 4.5c is what
+finally overwrites them with real values from this function's output).
+
+- **Magic-byte detection is hand-rolled, not the `file-type` npm package.**
+  PNG/JPEG/WebP signature checks are ~15 lines of deterministic byte
+  comparison; pulling in a dependency (an ESM-only one, at that — this repo
+  has hit ESM-interop pain before, see `vitest.config.mts`'s own `.mts`
+  rename note) for that felt like the wrong trade. Extending to more formats
+  (e.g. AVIF) means adding another signature check, not swapping libraries.
+- **Size cap (10MB, `MAX_UPLOAD_BYTES`) is checked before the magic-byte
+  sniff, which runs before any `sharp()` call.** Ordering matters for the
+  AC ("cap size" listed before "validate... strip EXIF" in
+  `specs/07-security-legal.md`) and for cost: no point spending CPU on
+  `sharp` parsing for something that's getting rejected anyway.
+- **A buffer can pass the magic-byte sniff and still fail.** The sniff only
+  checks the first several bytes; a corrupt or polyglot body past a valid
+  header is caught by wrapping the first real `sharp()` call
+  (`.rotate().toBuffer()`) in try/catch and downgrading to the same
+  `unrecognized_image_type` result rather than letting it throw. Byte-
+  sniffing is the fast first filter, not the only line of defense.
+- **EXIF handling is auto-orient-then-drop, not "strip in place."**
+  `sharp(buffer).rotate()` with no arguments reads the EXIF orientation tag
+  and physically rotates pixel data to match, then the resulting buffer
+  carries no metadata at all (sharp only writes metadata when
+  `.withMetadata()` is explicitly called, which nothing downstream does).
+  Stripping without the `.rotate()` step first would ship images that look
+  sideways/upside-down once the orientation tag they depended on is gone.
+- **Three fixed responsive widths** — `thumbnail` (400), `medium` (800),
+  `large` (1600) — each `withoutEnlargement: true` so a source image
+  smaller than a given target never upscales (all three sizes collapse to
+  the source's own dimensions for a small source, verified in the test
+  suite). Output format is always WebP regardless of source format
+  (PNG/JPEG/WebP in, WebP out) — one format to serve, no per-source-format
+  branching on the storefront side.
+- **Per `feedback_sharp_pipeline_gotcha` (auto memory):** the auto-orient
+  step (`rotate()`) and the resize+encode step (`resize().webp()`) are two
+  separate `sharp()` instances with an `await ... .toBuffer()` boundary
+  between them, not one chained pipeline — this repo has already been
+  bitten once by sharp silently producing wrong output dimensions when
+  unrelated ops share one instance.
+- **Test file needs `// @vitest-environment node`**, same reason and same
+  fix as both `opengraph-image.test.ts` files (`specs/03-storefront.md`):
+  sharp doesn't accept jsdom's `Buffer`/typed-array realm.
+- **Open risk, not yet resolved:** whether `sharp` actually runs under the
+  real `wrangler dev`/workerd runtime this app deploys to (task 6.0), as
+  opposed to just Vitest's Node test environment and Next's local dev
+  server. `sharp` ships native `libvips` bindings and workerd has no
+  native-addon support. `next/og`'s `ImageResponse` already depends on
+  `sharp` at request time and appears to work, which is the only existing
+  precedent either way — but that hasn't been specifically verified against
+  a `wrangler dev`/deployed build, only local `next dev` + Vitest. Flagged
+  on 4.5b (fix_plan.md) to check before 4.5c ships a UI on top of it.
