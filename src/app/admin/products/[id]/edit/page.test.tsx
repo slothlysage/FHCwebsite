@@ -12,8 +12,9 @@ vi.mock("@/lib/auth/csrf-cookie", () => ({
 }));
 
 import { db } from "@/lib/db/client";
-import { products } from "@/lib/db/schema";
+import { productVariants, products } from "@/lib/db/schema";
 import { createProduct } from "@/lib/repos/products";
+import { createVariant } from "@/lib/repos/variants";
 
 import EditProductPage from "./page";
 
@@ -31,6 +32,7 @@ describe("EditProductPage", () => {
 
   afterEach(async () => {
     for (const id of insertedIds.splice(0)) {
+      await db.delete(productVariants).where(eq(productVariants.productId, id));
       await db.delete(products).where(eq(products.id, id));
     }
   });
@@ -74,6 +76,28 @@ describe("EditProductPage", () => {
     render(await withParams(published.id));
     expect(
       screen.getByRole("button", { name: "Unpublish" }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders existing variants and an add-variant form", async () => {
+    const product = await createProduct({
+      slug: "test-edit-page-variants",
+      name: "Variant Candle",
+    });
+    insertedIds.push(product.id);
+    await createVariant({
+      productId: product.id,
+      sku: "FC-TEST-EDIT-PAGE-001",
+      name: "Balsam Fir",
+      priceCents: 2499,
+      weightGrams: 340,
+    });
+
+    render(await withParams(product.id));
+
+    expect(screen.getByText("FC-TEST-EDIT-PAGE-001")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Add variant" }),
     ).toBeInTheDocument();
   });
 

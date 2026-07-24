@@ -3158,7 +3158,7 @@ audit-log.ts` (new, first consumer) — `createAuditLogEntry`, append-only,
         `unpublishProductAction`/`softDeleteProductAction` (same module,
         same CSRF/state-return conventions as `createProductAction`/
         `updateProductAction`, per 4.3c's NOTE) — a new `MutationState =
-    { formError?: string }`, simpler than `ProductFormState` since none
+{ formError?: string }`, simpler than `ProductFormState` since none
         of these have per-field input. `publishProductAction` fetches the
         product + its images (`listImagesByProductId`) + variants
         (`listVariantsByProductId`), runs the gate, and on failure returns
@@ -3175,7 +3175,7 @@ audit-log.ts` (new, first consumer) — `createAuditLogEntry`, append-only,
         1.3a, unrelated to this task's logic but needed to keep the repo
         layer's "only repos import `db`" pattern consistent).
         `src/components/admin/product-status-actions.tsx` (new, `"use
-    client"`) — three independent `useActionState` forms (Publish or
+client"`) — three independent `useActionState` forms (Publish or
         Unpublish depending on current status, plus Delete), rendered on
         the edit screen only (a product must exist to have a status or be
         deletable, so nothing on the `new` screen). The delete form's
@@ -3237,6 +3237,133 @@ audit-log.ts` (new, first consumer) — `createAuditLogEntry`, append-only,
       `inventory_movements` row with a reason.
       AC: stock is never edited directly — it is always derived from movements, so
       the ledger and the displayed count cannot diverge.
+      Split 2026-07-24, same rationale as 4.3's umbrella split — variant CRUD
+      (create/edit/deactivate) and the stock-adjustment ledger UI are
+      independently testable. This umbrella item is ticked `[x]` only once
+      both below are `[x]`.
+
+  - [x] **4.4a Variant CRUD on the product edit page** (2026-07-24)
+        Deps: 4.3c. Per 4.3c's own NOTE: extended the existing product edit
+        page with a variants section, not a new route. Fields exactly per
+        `specs/04-admin.md`'s Variants screen: SKU, name, price, compare-at
+        price, weight, active flag — stock display/adjustment is 4.4b, not
+        touched here.
+        `src/lib/validation/variant-form.ts` — `variantFormSchema` mirrors
+        `product-form.ts`'s shape (SKU/name required+trimmed; price/
+        compare-at entered as whole/fractional dollars and converted to
+        integer cents server-side via the same `dollarsToCentsSchema`
+        pattern `product-filters.ts` already established, not reimplemented;
+        weight in whole grams; `isActive` read from a checkbox's
+        present-only-when-checked `"on"` value). `parseVariantForm`/
+        `variantFormFieldErrors`/`emptyVariantFormValues` follow
+        `product-form.ts`'s exact naming and per-field-error contract.
+        `src/lib/format.ts` gained `centsToDollarsInput(cents: number |
+    null)` — a plain `"24.99"` string (no `$`, no thousands separator)
+        for pre-filling an editable price input, `null` → `""`; distinct
+        from the existing `formatPriceCents` (display-only, `"$24.99"`).
+        `src/lib/actions/admin-variants.ts` — `createVariantAction(productId,
+    prevState, formData)` / `updateVariantAction(variantId, prevState,
+    formData)`, same CSRF/`useActionState`-state-return conventions as
+        `admin-products.ts`. SKU uniqueness (the schema's global `unique()`
+        on `product_variants.sku`) is checked proactively via
+        `getVariantBySku` before every insert/update and surfaced as a
+        per-field error, not a caught Postgres unique-violation — same
+        "check before write, don't catch after" style
+        `generateUniqueProductSlug` already uses for product slugs, except
+        here a collision is a real user-facing error (an owner-typed SKU),
+        not something to auto-dedupe the way an auto-generated slug is.
+        `updateVariantAction` excludes the variant's own id from that check,
+        same self-collision-avoidance shape as
+        `generateUniqueProductSlug`'s `excludeProductId`. Both actions write
+        an `audit_log` row (`action: "create_variant"` /
+        `"update_variant"`, `entityType: "variant"`) via the existing
+        `createAuditLogEntry`/`getCurrentAdminUserId`, per AGENT.md's
+        "every mutation writes an audit_log row" — same pattern 4.3d
+        established, extended to a new entity type rather than a new
+        mechanism. No separate deactivate/reactivate action — "active flag"
+        is spec'd as one of the edit form's own fields, not a toggle button
+        like publish/unpublish, so `updateVariantAction` covers it.
+        `src/components/admin/variant-form.tsx` (new, `"use client"`) —
+        `VariantForm`, structurally identical to `product-form.tsx`
+        (`useActionState`, per-field `aria-invalid`/`aria-describedby`,
+        form-level error banner) with variant-specific fields plus a
+        checkbox for `isActive`.
+        `src/components/admin/variant-list.tsx` (new, plain Server
+        Component — no interactivity of its own) — renders each existing
+        variant as a read-only summary row (SKU/name/price/compare-at/
+        weight/status) followed by a native `<details>`/`<summary>`
+        disclosure hiding that row's `VariantForm` (bound to
+        `updateVariantAction`), plus one always-present `<details>` at the
+        bottom for the create form (bound to `createVariantAction`). Plain
+        HTML disclosure, not client-side show/hide state, was the deciding
+        choice specifically so this stays a Server Component and the
+        edit-in-place UI keeps working with JS disabled — same
+        progressive-enhancement precedent 2.7c's cart forms established.
+        `updateAction` is passed as a `(variantId) => VariantAction`
+        factory, not a single bound action, since each row needs its own id
+        bound in (`updateVariantAction.bind(null, variantId)`), unlike
+        `createAction` which is bound once for the whole product.
+        `src/app/admin/products/[id]/edit/page.tsx` — fetches
+        `listVariantsByProductId(product.id)` (existing repo function,
+        4.1.3b/1.3b) alongside the product itself and renders `VariantList`
+        below `ProductStatusActions`.
+        Tests: 11 `variant-form.test.ts` unit cases (minimal valid
+        submission incl. dollars→cents conversion, checkbox `"on"` reads as
+        `true`, blank SKU/name rejected, non-numeric/negative price,
+        non-numeric weight, populated vs. non-numeric compare-at price,
+        empty-error-object on success, default empty values); 8
+        `admin-variants.test.ts` integration cases against the real dev
+        database (csrf mismatch on both actions, blank-SKU field error,
+        create + redirect + audit row, SKU-collision field error on
+        create, csrf mismatch leaves the variant unchanged on update,
+        update writes every field + redirects + audit row, no self-collision
+        when a variant's own SKU is resubmitted unchanged, SKU-collision
+        field error against a _different_ variant on update); 4
+        `variant-form.test.tsx` RTL cases (seeded values incl. checkbox
+        checked-state, per-field error after a whitespace-only SKU passes
+        client-side `required` same as `product-form.test.tsx`'s own Name
+        precedent, form-level csrf error, axe); 5 `variant-list.test.tsx`
+        RTL cases (renders SKU/name/price/compare-at/weight/status for a
+        real variant, empty state with no variants, inactive-status label,
+        an accessibly-named `Edit ${sku}` disclosure group plus the
+        always-present "Add variant" button, axe); 3 new
+        `format.test.ts` cases for `centsToDollarsInput`; 1 new
+        `edit/page.test.tsx` case (existing variant's SKU renders, "Add
+        variant" button present). All confirmed red first (import-
+        resolution errors for every new module; `getByText`/`getByRole`
+        finding nothing against the page before wiring) before implementing.
+        AC (per this subtask's slice — SKU/name/price/compare-at/weight/
+        active-flag CRUD): `npm run verify` green — 92 files, 700 tests,
+        98.12/93.98/99.71/98.07% coverage (global 80% floor and the 90%
+        `src/lib/services`/`src/lib/stripe`/`src/lib/auth` floors all
+        clear), build passes (`ƒ /admin/products/[id]/edit` unchanged in
+        the route table — same route, new content).
+        NOT verified live via an authenticated browser session — same gap
+        4.3b/4.3c/4.3d's own NOTEs already flag: a real `admin_users` row
+        exists in the local dev database from an earlier session's
+        `npm run seed-admin` run, but its plaintext password isn't known to
+        this iteration (no `ADMIN_PASSWORD` in `.env.local`, and resetting
+        a real admin's password to force a login would be exactly the kind
+        of guess this loop's rules warn against). Verification here is the
+        integration-test suite above, which invokes the Server
+        Component/Actions directly against the real database — the same
+        substitute those three prior tasks used for the same reason.
+        NOTE for 4.4b: `VariantList`'s read-only summary row is where stock
+        should render (a `Map<variantId, number>` from
+        `getStockForVariants`, batch-fetched by the edit page alongside
+        `listVariantsByProductId`, same "one batch query, not N" pattern
+        `product-listing.ts` already established) — extend this component,
+        don't add a second list. The adjustment form belongs inside the
+        same per-row `<details>` this task already added, alongside (not
+        replacing) `VariantForm`.
+
+  - [ ] **4.4b Stock adjustment ledger UI**
+        Deps: 4.4a. Displays current stock (derived from
+        `inventory_movements` via the `variant_stock` view — 1.3c) per
+        variant, never as an editable field. An "adjustment" form writes an
+        `inventory_movements` row with a required reason (the `reason` enum
+        plus a free-text `note`), attributed to the acting admin. AC: no
+        code path updates a stock number directly — only `recordMovement`.
 
 - [ ] **4.5 Image upload**
       Deps: 4.3. Cloudflare R2 via presigned URLs. Validate MIME by magic bytes not

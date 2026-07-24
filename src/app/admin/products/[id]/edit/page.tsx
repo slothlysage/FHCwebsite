@@ -7,10 +7,16 @@ import {
   updateProductAction,
   type ProductFormState,
 } from "@/lib/actions/admin-products";
+import {
+  createVariantAction,
+  updateVariantAction,
+} from "@/lib/actions/admin-variants";
 import { readCsrfCookie } from "@/lib/auth/csrf-cookie";
 import { getProductById } from "@/lib/repos/products";
+import { listVariantsByProductId } from "@/lib/repos/variants";
 import { ProductForm } from "@/components/admin/product-form";
 import { ProductStatusActions } from "@/components/admin/product-status-actions";
+import { VariantList } from "@/components/admin/variant-list";
 
 // Reads the csrf_token cookie — same rationale as the login/new-product
 // pages' own explicit export.
@@ -27,6 +33,7 @@ export default async function EditProductPage({
     notFound();
   }
 
+  const variants = await listVariantsByProductId(product.id);
   const csrfToken = (await readCsrfCookie()) ?? "";
   const initialState: ProductFormState = {
     errors: {},
@@ -58,6 +65,12 @@ export default async function EditProductPage({
         publishAction={publishProductAction.bind(null, product.id)}
         unpublishAction={unpublishProductAction.bind(null, product.id)}
         deleteAction={softDeleteProductAction.bind(null, product.id)}
+      />
+      <VariantList
+        variants={variants}
+        csrfToken={csrfToken}
+        createAction={createVariantAction.bind(null, product.id)}
+        updateAction={(variantId) => updateVariantAction.bind(null, variantId)}
       />
     </div>
   );

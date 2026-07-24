@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { formatPriceCents, truncateForMeta } from "@/lib/format";
+import {
+  centsToDollarsInput,
+  formatPriceCents,
+  truncateForMeta,
+} from "@/lib/format";
 
 describe("formatPriceCents", () => {
   it("formats whole dollars", () => {
@@ -13,6 +17,20 @@ describe("formatPriceCents", () => {
 
   it("formats zero", () => {
     expect(formatPriceCents(0)).toBe("$0.00");
+  });
+});
+
+describe("centsToDollarsInput", () => {
+  it("formats cents as a plain dollar string with no currency symbol", () => {
+    expect(centsToDollarsInput(2499)).toBe("24.99");
+  });
+
+  it("formats whole dollars with two decimal places", () => {
+    expect(centsToDollarsInput(2000)).toBe("20.00");
+  });
+
+  it("returns an empty string for null", () => {
+    expect(centsToDollarsInput(null)).toBe("");
   });
 });
 

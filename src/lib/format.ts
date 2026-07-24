@@ -7,6 +7,16 @@ export function formatPriceCents(cents: number): string {
   return usdFormatter.format(cents / 100);
 }
 
+// A plain "24.99"-shaped dollar string, no currency symbol or thousands
+// separators — for pre-filling an editable price input (4.4a's variant
+// form), unlike formatPriceCents' display-only "$24.99" output. `null`
+// (an absent compare-at price) becomes an empty string, matching the form's
+// own "blank means not provided" convention (variant-form.ts).
+export function centsToDollarsInput(cents: number | null): string {
+  if (cents === null) return "";
+  return (cents / 100).toFixed(2);
+}
+
 // Meta descriptions get truncated by search engines around ~155-160
 // characters anyway; doing it ourselves means the cut lands on a word
 // boundary with an ellipsis instead of mid-word wherever the engine feels

@@ -328,6 +328,43 @@ products.ts`'s `listProducts` gained a `search` option: a case-insensitive
   a `productId` each, so a future bulk-actions UI on the list page can loop
   a checkbox selection over the existing actions rather than adding new ones.
 
+### Implementation notes (4.4a — variant CRUD on the product edit page)
+
+- **Extends the product edit page, no new route** — same instruction 4.3c's
+  own NOTE left for this task. `src/components/admin/variant-list.tsx`
+  (Server Component) renders below `ProductStatusActions`; each existing
+  variant gets a native `<details>`/`<summary>` disclosure around its edit
+  `VariantForm`, and one more `<details>` at the bottom always holds the
+  create form. Plain HTML disclosure, not client-side show/hide state, is
+  what lets the whole section (list + edit-in-place + create) stay a Server
+  Component and keep working with JS disabled — same rationale 2.7c's cart
+  forms used for Server Actions generally.
+- **Money fields are entered in dollars, stored in cents.**
+  `src/lib/validation/variant-form.ts`'s `priceCents`/`compareAtPriceCents`
+  fields parse a `"24.99"`-shaped string and convert with the same
+  `dollarsToCentsSchema` shape `product-filters.ts` already established for
+  the storefront's price-range filter — not reimplemented a third way.
+  `src/lib/format.ts`'s new `centsToDollarsInput(cents)` is the inverse, for
+  pre-filling the edit form from a stored integer-cents value.
+- **SKU uniqueness is checked proactively, not caught after a Postgres
+  unique-violation.** `product_variants.sku` has a global `unique()`
+  constraint; both `createVariantAction`/`updateVariantAction` call
+  `getVariantBySku` first and return a per-field error if another variant
+  already owns it (excluding the variant's own id on update, so resubmitting
+  an unchanged SKU doesn't self-collide) — mirrors
+  `generateUniqueProductSlug`'s own check-before-write shape, except a SKU
+  collision is a real error surfaced to the owner, not something to
+  auto-dedupe the way an auto-generated slug is.
+- **No separate activate/deactivate action.** The spec's "active flag" is
+  one field on the same create/edit form (a checkbox), not a toggle button
+  like publish/unpublish — `updateVariantAction` covers flipping it, same as
+  any other field change.
+- **Stock is still not on this form** — deliberately deferred to 4.4b. The
+  read-only summary row `variant-list.tsx` renders per variant is where a
+  batch `getStockForVariants` lookup should land, and the adjustment form
+  belongs inside the same per-row `<details>` this task added, not a new
+  list or route.
+
 ## Rules
 
 - Every mutation writes an `audit_log` row with before/after JSON.
