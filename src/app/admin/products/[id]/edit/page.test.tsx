@@ -12,7 +12,8 @@ vi.mock("@/lib/auth/csrf-cookie", () => ({
 }));
 
 import { db } from "@/lib/db/client";
-import { productVariants, products } from "@/lib/db/schema";
+import { inventoryMovements, productVariants, products } from "@/lib/db/schema";
+import { recordMovement } from "@/lib/repos/inventory";
 import { createProduct } from "@/lib/repos/products";
 import { createVariant } from "@/lib/repos/variants";
 
@@ -32,6 +33,15 @@ describe("EditProductPage", () => {
 
   afterEach(async () => {
     for (const id of insertedIds.splice(0)) {
+      const variants = await db
+        .select()
+        .from(productVariants)
+        .where(eq(productVariants.productId, id));
+      for (const variant of variants) {
+        await db
+          .delete(inventoryMovements)
+          .where(eq(inventoryMovements.variantId, variant.id));
+      }
       await db.delete(productVariants).where(eq(productVariants.productId, id));
       await db.delete(products).where(eq(products.id, id));
     }
@@ -99,6 +109,35 @@ describe("EditProductPage", () => {
     expect(
       screen.getByRole("button", { name: "Add variant" }),
     ).toBeInTheDocument();
+  });
+
+  it("renders each variant's current stock from the movement ledger, not an editable field", async () => {
+    const product = await createProduct({
+      slug: "test-edit-page-stock",
+      name: "Stock Candle",
+    });
+    insertedIds.push(product.id);
+    const variant = await createVariant({
+      productId: product.id,
+      sku: "FC-TEST-EDIT-PAGE-STOCK-001",
+      name: "Balsam Fir",
+      priceCents: 2499,
+      weightGrams: 340,
+    });
+    await recordMovement({
+      variantId: variant.id,
+      delta: 10,
+      reason: "import",
+    });
+    await recordMovement({
+      variantId: variant.id,
+      delta: -3,
+      reason: "sale",
+    });
+
+    render(await withParams(product.id));
+
+    expect(screen.getByText("Stock: 7")).toBeInTheDocument();
   });
 
   it("rejects (404s) for an unknown product id", async () => {

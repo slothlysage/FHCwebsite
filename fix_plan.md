@@ -3232,7 +3232,7 @@ client"`) — three independent `useActionState` forms (Publish or
         already take just a `productId`), looped over a checkbox selection,
         when that list-page UI is built.
 
-- [ ] **4.4 Variant + inventory management**
+- [x] **4.4 Variant + inventory management**
       Deps: 4.3. Per-variant SKU, price, stock. Manual stock adjustment writes an
       `inventory_movements` row with a reason.
       AC: stock is never edited directly — it is always derived from movements, so
@@ -3258,12 +3258,12 @@ client"`) — three independent `useActionState` forms (Publish or
         `variantFormFieldErrors`/`emptyVariantFormValues` follow
         `product-form.ts`'s exact naming and per-field-error contract.
         `src/lib/format.ts` gained `centsToDollarsInput(cents: number |
-    null)` — a plain `"24.99"` string (no `$`, no thousands separator)
+null)` — a plain `"24.99"` string (no `$`, no thousands separator)
         for pre-filling an editable price input, `null` → `""`; distinct
         from the existing `formatPriceCents` (display-only, `"$24.99"`).
         `src/lib/actions/admin-variants.ts` — `createVariantAction(productId,
-    prevState, formData)` / `updateVariantAction(variantId, prevState,
-    formData)`, same CSRF/`useActionState`-state-return conventions as
+prevState, formData)` / `updateVariantAction(variantId, prevState,
+formData)`, same CSRF/`useActionState`-state-return conventions as
         `admin-products.ts`. SKU uniqueness (the schema's global `unique()`
         on `product_variants.sku`) is checked proactively via
         `getVariantBySku` before every insert/update and surfaced as a
@@ -3357,13 +3357,111 @@ client"`) — three independent `useActionState` forms (Publish or
         same per-row `<details>` this task already added, alongside (not
         replacing) `VariantForm`.
 
-  - [ ] **4.4b Stock adjustment ledger UI**
-        Deps: 4.4a. Displays current stock (derived from
-        `inventory_movements` via the `variant_stock` view — 1.3c) per
-        variant, never as an editable field. An "adjustment" form writes an
-        `inventory_movements` row with a required reason (the `reason` enum
-        plus a free-text `note`), attributed to the acting admin. AC: no
-        code path updates a stock number directly — only `recordMovement`.
+  - [x] **4.4b Stock adjustment ledger UI** (2026-07-24)
+        Deps: 4.4a. `src/lib/validation/stock-adjustment-form.ts` —
+        `stockAdjustmentReasons = ["adjustment", "damage"] as const`, a
+        deliberate **subset** of the DB's full `inventory_reason` enum
+        (`import`/`sale`/`refund`/`adjustment`/`damage`, `src/lib/db/
+schema.ts`): the other three reasons are always written by a system
+        flow that already attributes its own reason (the catalog importer,
+        checkout, a future refund handler) — a human at this form only ever
+        means "I counted wrong" or "this got damaged/lost." `delta` is a
+        signed, non-zero integer (`z.number().int().refine(v => v !== 0)`);
+        `note` is optional free text, blank-trimmed to `undefined` same
+        pattern as every other optional text field in this codebase.
+        Mirrors `variant-form.ts`'s exact shape: `parseStockAdjustmentForm`/
+        `stockAdjustmentFormFieldErrors`/`emptyStockAdjustmentFormValues`.
+        `src/lib/actions/admin-inventory.ts` — `adjustStockAction(variantId,
+prevState, formData)`, same CSRF/`useActionState`-state-return
+        convention as `admin-variants.ts`. The **only** write is
+        `recordMovement` (`src/lib/repos/inventory.ts`) — the same function
+        `catalog-import.ts`/`order-fulfillment.ts` already use — so this
+        task's AC ("no code path updates a stock number directly") holds by
+        construction, not by convention alone: there is no `updateStock`
+        function anywhere in the repo layer to accidentally call instead.
+        Writes an `audit_log` row (`action: "adjust_stock"`, `entityType:
+"variant"`, `before: {stock}`, `after: {stock, delta, reason, note}`
+        — `stock` computed via `getStockForVariant` before the movement is
+        recorded) via the existing `createAuditLogEntry`/
+        `getCurrentAdminUserId`, same pattern 4.4a's variant actions and
+        4.3d's publish/unpublish/delete actions already established.
+        `src/components/admin/stock-adjustment-form.tsx` (new, `"use
+client"`) — `StockAdjustmentForm`: delta text input (`inputMode=
+"numeric"`, hint "Positive to add, negative to remove, e.g. -3"), a
+        `<select>` restricted to the two manual reasons (an initial
+        `disabled value=""` option forces an explicit choice, and doubles as
+        the schema's own real validation — posting a blank or a
+        system-only reason like `sale` is rejected server-side too, not
+        just hidden client-side), and an optional note `<textarea>`.
+        `src/components/admin/variant-list.tsx` extended per 4.4a's own
+        NOTE (not a new list/route): gained a required `stockByVariantId:
+Map<string, number>` prop (absent key reads as 0, mirroring
+        `getStockForVariants`' own "absent means zero" contract) rendered as
+        a plain `Stock: N` text span alongside SKU/price/weight/status —
+        never an input — and a required `adjustStockAction` factory prop
+        (same per-row `.bind(null, variantId)` shape as `updateAction`),
+        rendering `StockAdjustmentForm` inside the same per-row `<details>`
+        as `VariantForm`, alongside it, exactly as 4.4a's NOTE specified.
+        `src/app/admin/products/[id]/edit/page.tsx` — one batch
+        `getStockForVariants(variants.map(v => v.id))` call alongside the
+        existing `listVariantsByProductId`, same "one query, not N" shape
+        `product-listing.ts` established for the storefront; binds
+        `adjustStockAction` per row the same way `updateVariantAction`
+        already is.
+        Tests: 9 `stock-adjustment-form.test.ts` unit cases (positive/
+        negative delta accepted, zero rejected, non-numeric rejected,
+        fractional rejected, missing reason rejected, a system-only reason
+        like `sale` rejected, blank note reads as absent not `""`, omitted
+        note is fine, empty-errors-on-success / per-field-errors-on-failure);
+        5 `admin-inventory.test.ts` integration cases against the real dev
+        database (csrf mismatch records nothing, zero-delta field error
+        records nothing, unknown variant id returns a form error, a
+        successful adjustment writes the movement row + an `adjust_stock`
+        audit row + redirects, a negative delta records correctly with
+        `note: null`); 7 `stock-adjustment-form.test.tsx` RTL cases
+        (fields present, reason `<select>` offers only `adjustment`/`damage`
+        — not `sale`/`import`/`refund`, per-field error, form-level error,
+        csrf hidden field carries the real token, axe clean with and without
+        a field error shown); `variant-list.test.tsx` gained 3 new cases
+        (renders `Stock: N` from the batch map and never an editable "Stock"
+        field, defaults to `Stock: 0` for a variant absent from the map, the
+        adjustment form's "Record adjustment" button is inside the same
+        `Edit ${sku}` disclosure group) plus a shared `defaultProps` object
+        so every existing case picks up the two new required props without
+        repeating them; `edit/page.test.tsx` gained 1 new case (two real
+        `recordMovement` calls, `import +10` then `sale -3`, render the page,
+        assert `Stock: 7`). All confirmed red first (import-resolution
+        errors for the new modules; the three modified test files' new
+        assertions failing against the pre-change component/page) before
+        implementing.
+        AC met: "no code path updates a stock number directly — only
+        `recordMovement`" verified structurally (grepped the repo: the only
+        callers of `recordMovement` are `catalog-import.ts`,
+        `order-fulfillment.ts`, and this task's `admin-inventory.ts`; there
+        is no `updateStock`/`setStock` function in `src/lib/repos/
+inventory.ts` at all — `stock` is never a column per `specs/
+02-data-model.md`, so there is nothing to update even by mistake).
+        `npm run verify` green: 95 files, 728 tests,
+        98.18/94.11/99.72/98.13% coverage (global 80% floor and every 90%
+        module floor clear; `admin-inventory.ts` itself
+        100/93.75/100/100 — `src/lib/actions/**` isn't one of the elevated-
+        threshold buckets in `vitest.config.mts`, only `services`/`stripe`/
+        `auth` are, so the global 80% floor is what actually gates it, and
+        it clears that easily), build passes (`ƒ /admin/products/[id]/edit`
+        unchanged in the route table — same route, more content).
+        NOT verified live via an authenticated browser session — same gap
+        4.3b/4.3c/4.3d/4.4a's own NOTEs already flag (no known
+        `ADMIN_PASSWORD` for the real seeded admin row in this sandbox, and
+        resetting a real admin's password to force a login is exactly the
+        kind of guess this loop's rules warn against). The integration-test
+        suite above, invoking the Server Action/Component tree directly
+        against the real database, is the established substitute.
+        NOTE for 4.6 (orders dashboard)/4.9 (audit log view): `adjust_stock`
+        is a new `audit_log.action` value, following the same
+        `create_variant`/`update_variant`/`publish`/`unpublish`/
+        `soft_delete` naming convention 4.3d/4.4a already established —
+        nothing new to design there, just another value the timeline UI
+        should render a human-readable line for.
 
 - [ ] **4.5 Image upload**
       Deps: 4.3. Cloudflare R2 via presigned URLs. Validate MIME by magic bytes not

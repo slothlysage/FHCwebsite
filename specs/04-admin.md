@@ -365,6 +365,35 @@ products.ts`'s `listProducts` gained a `search` option: a case-insensitive
   belongs inside the same per-row `<details>` this task added, not a new
   list or route.
 
+## Implementation notes (4.4b — stock adjustment ledger UI)
+
+- The adjustment form's `reason` select only offers `adjustment`/`damage`,
+  a subset of the DB's full `inventory_reason` enum
+  (`import`/`sale`/`refund`/`adjustment`/`damage`). The other three are
+  always written by a system flow that already attributes its own reason
+  (catalog import, checkout, a future refund handler) — a human at this
+  form only ever means "I counted wrong" or "this got damaged/lost."
+  `src/lib/validation/stock-adjustment-form.ts`'s `stockAdjustmentReasons`
+  constant is the one place that list lives; extend it there, not by
+  widening to the full DB enum, if a new manually-selectable reason is
+  ever needed.
+- `adjustStockAction` (`src/lib/actions/admin-inventory.ts`) is the only
+  admin-facing write path onto `inventory_movements`, and it calls the same
+  `recordMovement` (`src/lib/repos/inventory.ts`) that the catalog importer
+  and order fulfillment already use — there is no `updateStock`/`setStock`
+  function anywhere in the repo layer, so "stock is never edited directly"
+  holds structurally, not just by convention.
+- `variant-list.tsx`'s `stockByVariantId` prop follows
+  `getStockForVariants`' "absent key means zero" contract, not "not found" —
+  the edit page always calls it with every variant id up front (one batch
+  query, not N), same pattern `product-listing.ts` established for the
+  storefront.
+- `audit_log.action` gained `"adjust_stock"` (`entityType: "variant"`,
+  `before: {stock}`, `after: {stock, delta, reason, note}`), following the
+  same naming convention as `create_variant`/`update_variant`/`publish`/
+  `unpublish`/`soft_delete` — 4.6/4.9's timeline UI needs a human-readable
+  line for this value alongside the existing ones, nothing structurally new.
+
 ## Rules
 
 - Every mutation writes an `audit_log` row with before/after JSON.

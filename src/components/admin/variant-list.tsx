@@ -1,7 +1,10 @@
+import type { StockAdjustmentFormState } from "@/lib/actions/admin-inventory";
 import type { VariantFormState } from "@/lib/actions/admin-variants";
 import { centsToDollarsInput, formatPriceCents } from "@/lib/format";
+import { emptyStockAdjustmentFormValues } from "@/lib/validation/stock-adjustment-form";
 import { emptyVariantFormValues } from "@/lib/validation/variant-form";
 
+import { StockAdjustmentForm } from "./stock-adjustment-form";
 import { VariantForm } from "./variant-form";
 
 // 4.4a's variants section on the product edit page — extends the existing
@@ -27,6 +30,11 @@ type VariantAction = (
   formData: FormData,
 ) => Promise<VariantFormState>;
 
+type StockAction = (
+  state: StockAdjustmentFormState,
+  formData: FormData,
+) => Promise<StockAdjustmentFormState>;
+
 function variantInitialState(variant: VariantListItem): VariantFormState {
   return {
     errors: {},
@@ -43,17 +51,26 @@ function variantInitialState(variant: VariantListItem): VariantFormState {
 
 export function VariantList({
   variants,
+  stockByVariantId,
   csrfToken,
   createAction,
   updateAction,
+  adjustStockAction,
 }: {
   variants: VariantListItem[];
+  // Batch-fetched by the edit page alongside listVariantsByProductId, same
+  // "one query, not N" pattern product-listing.ts already established
+  // (4.4a's own NOTE for this task). Absent key means zero stock, mirroring
+  // getStockForVariants' own "absent means zero" contract — never treat a
+  // missing entry as "not found."
+  stockByVariantId: Map<string, number>;
   csrfToken: string;
   createAction: VariantAction;
   // A factory, not a single bound action — each row needs its own variant id
   // bound in, and a plain `.bind(null, id)` can't be produced once up front
   // for every row.
   updateAction: (variantId: string) => VariantAction;
+  adjustStockAction: (variantId: string) => StockAction;
 }) {
   return (
     <div className="mt-8 border-t border-ink/10 pt-6">
@@ -85,6 +102,9 @@ export function VariantList({
                 <span className="text-ink/70">
                   Status: {variant.isActive ? "Active" : "Inactive"}
                 </span>
+                <span className="text-ink/70">
+                  Stock: {stockByVariantId.get(variant.id) ?? 0}
+                </span>
               </div>
               <details className="mt-2" aria-label={`Edit ${variant.sku}`}>
                 <summary className="cursor-pointer text-sm font-medium text-lavender-dark">
@@ -95,6 +115,14 @@ export function VariantList({
                   initialState={variantInitialState(variant)}
                   csrfToken={csrfToken}
                   submitLabel="Save variant"
+                />
+                <StockAdjustmentForm
+                  action={adjustStockAction(variant.id)}
+                  initialState={{
+                    errors: {},
+                    values: emptyStockAdjustmentFormValues,
+                  }}
+                  csrfToken={csrfToken}
                 />
               </details>
             </li>

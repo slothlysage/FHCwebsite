@@ -7,11 +7,13 @@ import {
   updateProductAction,
   type ProductFormState,
 } from "@/lib/actions/admin-products";
+import { adjustStockAction } from "@/lib/actions/admin-inventory";
 import {
   createVariantAction,
   updateVariantAction,
 } from "@/lib/actions/admin-variants";
 import { readCsrfCookie } from "@/lib/auth/csrf-cookie";
+import { getStockForVariants } from "@/lib/repos/inventory";
 import { getProductById } from "@/lib/repos/products";
 import { listVariantsByProductId } from "@/lib/repos/variants";
 import { ProductForm } from "@/components/admin/product-form";
@@ -34,6 +36,9 @@ export default async function EditProductPage({
   }
 
   const variants = await listVariantsByProductId(product.id);
+  const stockByVariantId = await getStockForVariants(
+    variants.map((variant) => variant.id),
+  );
   const csrfToken = (await readCsrfCookie()) ?? "";
   const initialState: ProductFormState = {
     errors: {},
@@ -68,9 +73,13 @@ export default async function EditProductPage({
       />
       <VariantList
         variants={variants}
+        stockByVariantId={stockByVariantId}
         csrfToken={csrfToken}
         createAction={createVariantAction.bind(null, product.id)}
         updateAction={(variantId) => updateVariantAction.bind(null, variantId)}
+        adjustStockAction={(variantId) =>
+          adjustStockAction.bind(null, variantId)
+        }
       />
     </div>
   );
