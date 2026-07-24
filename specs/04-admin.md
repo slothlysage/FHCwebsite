@@ -135,6 +135,48 @@ cart-cookie.ts`'s `next/headers` read/write/(now also delete, for
   already use for slugs/SKUs). Any future admin-auth test file should do
   the same rather than reusing a fixed email literal.
 
+### Implementation notes (4.2 — route protection)
+
+- **Extends `src/proxy.ts`, per 4.1c's own instruction, rather than adding
+  a second middleware file** — Next.js only runs one. For any `/admin/**`
+  path except the exact `/admin/login` exemption, and any `/api/admin/**`
+  path, it reads the `admin_session` cookie straight off
+  `request.cookies` (not `next/headers`'s `cookies()`, which only works
+  inside a Server Action/Route Handler request context) and calls the
+  existing `verifySession` (4.1b) directly. Invalid/missing → 307 redirect
+  to `/admin/login` for pages, 401 JSON for API routes; valid → falls
+  through to the existing CSRF-cookie logic unchanged.
+- **Corrects a 4.1c assumption about the Edge Runtime.** 4.1c split
+  `generateCsrfToken` (Web Crypto) out of `csrfTokensMatch` (`node:crypto`)
+  into separate files because it believed `proxy.ts` ran in Next's Edge
+  Runtime, which doesn't support `node:crypto`. This task imports
+  `verifySession` — which pulls in both `node:crypto`'s `createHash` and a
+  real database read — directly into `proxy.ts`, and a real `next build`
+  compiles clean with no Edge Runtime warning. Next.js 16.2.11's own
+  build-time static analysis
+  (`node_modules/next/dist/build/analysis/get-page-static-info.js`)
+  actually _throws_ if a Proxy file's segment config sets `runtime` at
+  all, with the message "Proxy always runs on Node.js runtime" — in this
+  Next version, Proxy (the `middleware.ts` successor) has no Edge Runtime
+  option at all, full stop. Whatever caused 4.1c's original build error,
+  it isn't this. The `csrf-token.ts`/`csrf.ts` file split is harmless and
+  left as-is, but this removes the "must avoid node:crypto" constraint for
+  any _future_ file reachable from `proxy.ts`'s import graph.
+- **Route enumeration is a hardcoded list, not a filesystem walk, for
+  now.** No real page files exist yet under `src/app/admin/**` or
+  `src/app/api/admin/**` (those start landing at 4.3) — there's nothing on
+  disk to walk. `src/proxy.test.ts`'s `PROTECTED_PAGE_PATHS`/
+  `PROTECTED_API_PATHS` arrays mirror this doc's Screens section
+  (dashboard, products, orders, settings) instead. Once those route
+  directories exist, switch the test to a real directory scan (same idea
+  as `tests/unit/ci-config.test.ts`'s script-existence check) so a newly
+  added, forgotten-to-protect page is caught automatically rather than
+  relying on someone remembering to extend the hardcoded array.
+- **No login page exists yet.** `/admin/login` is exempted from the auth
+  check (so login is reachable at all) but there's no `page.tsx` there —
+  an unauthenticated visit currently 404s past the proxy's pass-through.
+  Building the actual form is fix_plan task 4.2a, newly added.
+
 ## Screens
 
 **Dashboard** — orders needing fulfillment, low-stock variants, last 30 days

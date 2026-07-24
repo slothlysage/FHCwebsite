@@ -1729,7 +1729,7 @@ allow_backorder` rule — a backorder-enabled variant has no real
       `npm run verify` green: 73 files, 557 tests,
       98.12/93.95/99.65/98.07% coverage.
       Verified live via `next dev` + curl: `/faq /shipping /returns /privacy
-    /terms` all return 200 with the real content (checked for zero
+  /terms` all return 200 with the real content (checked for zero
       remaining "Shopify"/"insert email"/"lorem ipsum" strings); `/about`
       and `/contact` correctly still 404, same as an arbitrary unknown path
       — confirming the footer's links to those two are still open, not
@@ -2782,10 +2782,86 @@ auth.test.ts` (9 integration tests against the real dev database —
         stmts/100% lines), build passes with no Edge Runtime warning.
         See `specs/04-admin.md`'s new "Implementation notes (4.1c)".
 
-- [ ] **4.2 Route protection**
-      Deps: 4.1. Middleware guarding `/admin/**` and admin API routes.
-      AC: an unauthenticated request to every admin route redirects/401s — test
-      enumerates the routes so a newly added unguarded route fails the suite.
+- [x] **4.2 Route protection**
+      Deps: 4.1. Extended `src/proxy.ts` (the only allowed place, per 4.1c's
+      own NOTE) rather than adding a second middleware file. For any
+      `/admin/**` path except the exact `/admin/login` exemption, and for
+      any `/api/admin/**` path, reads the `admin_session` cookie straight
+      off `request.cookies` (not `next/headers`'s `cookies()` — that only
+      works inside a Server Action/Route Handler request context, not
+      here) and calls the existing `verifySession` (4.1b) directly — no
+      new session-checking logic, this is the same function the login
+      action already uses. An invalid/missing session redirects page
+      requests (307) to `/admin/login` and returns a 401 JSON body for API
+      requests; a valid session passes through to the existing CSRF-cookie
+      logic unchanged.
+      **Corrects a 4.1c assumption**: that task split `generateCsrfToken`
+      (Web Crypto) out of `csrfTokensMatch` (`node:crypto`) specifically
+      because it believed `proxy.ts` ran in Next's Edge Runtime, which
+      doesn't support `node:crypto`. This task imports `verifySession`
+      (which pulls in `node:crypto`'s `createHash` _and_ a real DB read)
+      straight into `proxy.ts`, and a real `npm run build` compiles clean
+      with no Edge Runtime warning. Next.js 16.2.11's own build-time
+      analysis (`get-page-static-info.js`) actually _throws_ if a Proxy
+      file's segment config sets `runtime` at all, with the message
+      "Proxy always runs on Node.js runtime" — this Next version's Proxy
+      (the `middleware.ts` successor) has no Edge Runtime option anymore,
+      full stop. Whatever caused 4.1c's original build error, it isn't
+      this. The `csrf-token.ts`/`csrf.ts` split is harmless and left
+      as-is (no reason to merge them back), but this removes the
+      constraint for any _future_ file reachable from `proxy.ts`'s import
+      graph — see `specs/04-admin.md`'s new "Implementation notes (4.2)".
+      No real page files exist yet under `src/app/admin/**` or
+      `src/app/api/admin/**` (those start at 4.3) — "test enumerates the
+      routes" is satisfied today with a hardcoded path list
+      (`PROTECTED_PAGE_PATHS`/`PROTECTED_API_PATHS` in `src/proxy.test.ts`)
+      mirroring `specs/04-admin.md`'s Screens section (dashboard, products,
+      orders, settings) rather than a filesystem walk, since there's
+      nothing on disk yet to walk. Switch to a real directory scan (same
+      idea as `tests/unit/ci-config.test.ts`) once those route files exist,
+      so a newly added but forgotten-to-protect page is caught
+      automatically instead of relying on someone remembering to extend
+      the hardcoded array.
+      Tests (`src/proxy.test.ts`, extended): every hardcoded page path
+      redirects unauthenticated (307 → `/admin/login`), every API path
+      401s unauthenticated, `/admin/login` itself is never redirected, a
+      real issued session (via `issueSession`, real dev-DB admin user)
+      passes a protected page through, and an expired session redirects
+      the same as no session at all. Confirmed every new case red first
+      (200 instead of 307/401) before implementing. The two pre-existing
+      CSRF tests were updated to `await proxy(...)` since the function is
+      now async (it needs to await the DB-backed `verifySession` call).
+      AC met: `npm run verify` green — 73 files, 568 tests,
+      98.14/94.07/99.65/98.09% coverage (global 80% floor clear;
+      `src/proxy.ts` itself doesn't appear in the uncovered-lines report at
+      all — 100% across all four metrics), build passes with the route
+      table showing `ƒ Proxy (Middleware)`.
+      NOTE — discovered gap, new task added below (4.2a): no login page/
+      screen exists anywhere in the backlog. 4.1c and this task both note
+      "a future admin-screens task builds the actual form," but no task
+      actually claims that work — `/admin/login` redirecting nowhere
+      useful (a 404) is a real, if minor, gap once an admin actually needs
+      to log in.
+
+- [ ] **4.2a Admin login page**
+      Deps: 4.2. No task in this backlog builds it, despite 4.1c and 4.2
+      both assuming "a future admin-screens task" would — discovered while
+      closing 4.2. `src/app/admin/login/page.tsx`: a plain Server
+      Component form (email, password) posting to `loginAction` (4.1c,
+      already fully implemented and tested — this task only needs a
+      `<form>` around it), embedding the CSRF token `proxy.ts` already
+      issues into a hidden field reading the `csrf_token` cookie
+      server-side. Must render per-field/form error states for each
+      `AdminLoginResult` failure reason (`csrf_mismatch`,
+      `invalid_credentials`, `locked`) without leaking which one applies
+      to an unknown-vs-wrong-password case (spec: identical message for
+      both — the copy layer must not undo 4.1a's user-enumeration timing
+      defense by being more specific in the UI than the service is).
+      On success, redirect to `/admin` (the future Dashboard route, 4.6).
+      AC: a real browser (or Playwright) run through `next dev` can type
+      real credentials from the seed script and land on an authenticated
+      `/admin` request; a wrong password shows one generic error; a
+      CSRF-stripped submission is rejected the same as any other mismatch.
 
 - [ ] **4.3 Product CRUD**
       Deps: 4.2, 1.3. Create, edit, publish/unpublish, soft-delete. Slug generation
