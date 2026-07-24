@@ -10,6 +10,7 @@
 import type Stripe from "stripe";
 
 import { deleteCartItemsByCartId } from "@/lib/repos/cart";
+import { incrementDiscountCodeUsage } from "@/lib/repos/discount-codes";
 import {
   getStockForVariant,
   lockVariantStock,
@@ -98,6 +99,7 @@ export async function fulfillCheckoutSession(
           typeof session.payment_intent === "string"
             ? session.payment_intent
             : null,
+        discountCodeId: summary.appliedDiscountCode?.id ?? null,
         paidAt: new Date(),
       },
       summary.lines.map((line) => ({
@@ -112,6 +114,17 @@ export async function fulfillCheckoutSession(
       })),
       tx,
     );
+
+    // Atomic increment, inside the same tx as the order that redeemed it —
+    // this, not the cart-time read-then-check in discount.ts, is what makes
+    // "a code cannot be applied twice" hold under concurrent checkouts
+    // (specs/05-payments.md's "Implementation notes (3.8a)"). Runs at most
+    // once per event because the webhook's own event-id idempotency guard
+    // (src/lib/stripe/webhook.ts) already ensures this whole function runs
+    // at most once per Stripe event.
+    if (summary.appliedDiscountCode) {
+      await incrementDiscountCodeUsage(summary.appliedDiscountCode.id, tx);
+    }
 
     if (hasUnexpectedOversell) {
       // No owner-notification channel exists yet (fix_plan.md's "Blocked —

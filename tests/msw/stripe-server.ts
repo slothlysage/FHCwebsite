@@ -30,6 +30,15 @@ type FakePrice = {
   metadata: Record<string, string>;
 };
 
+type FakeCoupon = {
+  id: string;
+  object: "coupon";
+  percent_off: number | null;
+  amount_off: number | null;
+  currency: string | null;
+  duration: string;
+};
+
 // Captured shape of a `checkout.sessions.create` call (3.3), not a full
 // Stripe Session — just what `checkout.ts`'s tests need to assert against:
 // the line items actually billed (resolved against the fake `prices` map,
@@ -45,17 +54,19 @@ type FakeCheckoutSession = {
   shippingAddressCollection: string[];
   shippingOptions: Array<{ displayName: string; amount: number }>;
   lineItems: Array<{ price: string; quantity: number; unitAmount: number }>;
+  discountCoupon: string | null;
 };
 
 let idCounter = 0;
 const products = new Map<string, FakeProduct>();
 const prices = new Map<string, FakePrice>();
+const coupons = new Map<string, FakeCoupon>();
 const checkoutSessions = new Map<string, FakeCheckoutSession>();
 // Idempotency-Key -> the response body first returned for that key. A real
 // Stripe account keeps this for 24h; tests only need it to outlive one run.
 const idempotencyResponses = new Map<
   string,
-  FakeProduct | FakePrice | FakeCheckoutSession
+  FakeProduct | FakePrice | FakeCoupon | FakeCheckoutSession
 >();
 
 function extractMetadata(params: URLSearchParams): Record<string, string> {
@@ -93,6 +104,19 @@ function missingPriceResponse() {
         type: "invalid_request_error",
         code: "resource_missing",
         message: "No such price",
+      },
+    },
+    { status: 404 },
+  );
+}
+
+function missingCouponResponse() {
+  return HttpResponse.json(
+    {
+      error: {
+        type: "invalid_request_error",
+        code: "resource_missing",
+        message: "No such coupon",
       },
     },
     { status: 404 },
@@ -162,6 +186,37 @@ export const stripeServer = setupServer(
     },
   ),
 
+  http.post("https://api.stripe.com/v1/coupons", async ({ request }) => {
+    const idempotencyKey = request.headers.get("Idempotency-Key");
+    if (idempotencyKey && idempotencyResponses.has(idempotencyKey)) {
+      return HttpResponse.json(idempotencyResponses.get(idempotencyKey));
+    }
+
+    const params = new URLSearchParams(await request.text());
+    const id = `coupon_test_${++idCounter}`;
+    const coupon: FakeCoupon = {
+      id,
+      object: "coupon",
+      percent_off: params.has("percent_off")
+        ? Number(params.get("percent_off"))
+        : null,
+      amount_off: params.has("amount_off")
+        ? Number(params.get("amount_off"))
+        : null,
+      currency: params.get("currency"),
+      duration: params.get("duration") ?? "once",
+    };
+    coupons.set(id, coupon);
+    if (idempotencyKey) idempotencyResponses.set(idempotencyKey, coupon);
+    return HttpResponse.json(coupon);
+  }),
+
+  http.get("https://api.stripe.com/v1/coupons/:id", ({ params }) => {
+    const coupon = coupons.get(params.id as string);
+    if (!coupon) return missingCouponResponse();
+    return HttpResponse.json(coupon);
+  }),
+
   http.post(
     "https://api.stripe.com/v1/checkout/sessions",
     async ({ request }) => {
@@ -212,6 +267,7 @@ export const stripeServer = setupServer(
           amount: Number(shippingAmounts[index] ?? "0"),
         })),
         lineItems,
+        discountCoupon: params.get("discounts[0][coupon]"),
       };
       checkoutSessions.set(id, session);
       if (idempotencyKey) idempotencyResponses.set(idempotencyKey, session);
@@ -226,12 +282,22 @@ export function seedStripePrice(price: FakePrice): void {
   prices.set(price.id, price);
 }
 
+// Test-only helper: seed a pre-existing Coupon as if an earlier sync run
+// already created it, without going through the create handler.
+export function seedStripeCoupon(coupon: FakeCoupon): void {
+  coupons.set(coupon.id, coupon);
+}
+
 export function getStripeFakeProducts(): FakeProduct[] {
   return [...products.values()];
 }
 
 export function getStripeFakePrices(): FakePrice[] {
   return [...prices.values()];
+}
+
+export function getStripeFakeCoupons(): FakeCoupon[] {
+  return [...coupons.values()];
 }
 
 export function getStripeFakeCheckoutSessions(): FakeCheckoutSession[] {
@@ -241,6 +307,7 @@ export function getStripeFakeCheckoutSessions(): FakeCheckoutSession[] {
 export function resetStripeFakeState(): void {
   products.clear();
   prices.clear();
+  coupons.clear();
   checkoutSessions.clear();
   idempotencyResponses.clear();
 }

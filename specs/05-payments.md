@@ -761,3 +761,54 @@ triggered by `getCartSummary` briefly holding one more concurrent
 connection than before. Fixed by making the two reads sequential; do not
 "optimize" this back to `Promise.all` without re-running that test file
 many times first.
+
+## Implementation notes (3.8c)
+
+**Stripe discounts a Checkout Session via a Coupon id, not an arbitrary cents
+amount.** `src/lib/services/stripe-discount-sync.ts`'s
+`ensureStripeCoupon(discountCode)` syncs one `discount_codes` row to one
+persistent Stripe Coupon, mirroring `stripe-catalog-sync.ts`'s variant->Price
+pattern: reuse the cached `stripeCouponId` when a live retrieve still matches
+the code's current `kind`/`value`; otherwise create a new Coupon (`percent_off`
+or `amount_off`+`currency: "usd"`, `duration: "once"`) and cache its id via
+`discount-codes.ts`'s `setDiscountCodeStripeCouponId`. A `resource_missing`
+retrieve (deleted out-of-band) is treated exactly like "never synced," same
+as `stripe-catalog-sync.ts`'s `fetchStripePrice`.
+
+**No archive step, unlike Prices.** Stripe Coupons have no `active` toggle —
+`prices.update(id, {active: false})` has no Coupon equivalent. A stale Coupon
+(the code's value changed since last sync) is simply abandoned, not deleted;
+this is fine because Coupons aren't customer-facing catalog objects the way
+Products/Prices are, so there's no dashboard-clutter concern like 3.2b's
+stray-objects incident (fix_plan.md's resolved "Blocked — needs human" entry).
+
+**Synced lazily from `checkout.ts`, not a separate CLI.** 3.2's variant sync
+is a standalone `npm run sync-stripe` step because there's a real admin gap
+between "catalog row created/edited" and "checkout should be able to sell
+it." No admin UI creates/edits `discount_codes` rows yet (phase 4 doesn't
+have a task number for one), so `checkout.ts` calls `ensureStripeCoupon`
+directly, once per session-creation request, when `getCartSummary`'s
+`appliedDiscountCode` is set — the cache (`stripeCouponId`) is what keeps
+this cheap on every repeat checkout for the same code, not a separate sync
+step. Revisit this call site once an admin discount-code UI exists and wants
+an explicit sync action instead.
+
+**`discounts` is omitted entirely, not passed as `undefined`, when no code is
+applied.** `checkout.ts` builds the params object with
+`...(discounts ? {discounts} : {})` rather than always including a
+possibly-`undefined` `discounts` key — consistent with how Stripe's own
+qs-based param serialization treats a present-but-undefined key vs. an
+absent one, and it's what `tests/msw/stripe-server.ts`'s fake asserts against
+(`discountCoupon: null` for a plain cart).
+
+**Order money still traces back to Stripe, not to `discount.ts`'s own
+computed cents.** `order-fulfillment.ts` was already reading
+`session.total_details?.amount_discount` for `orders.discountCents` (3.5) —
+that didn't change. This task only added `discountCodeId` to the order
+insert and, inside the same fulfillment transaction right after
+`createOrder`, a call to `incrementDiscountCodeUsage(id, tx)` when a code was
+applied. That call — not the cart-time read-then-check in `discount.ts` — is
+the actual enforcement for "a code cannot be applied twice": it runs at most
+once per Stripe event because `fulfillCheckoutSession` itself already only
+runs once per event (the webhook's `webhook_events` idempotency guard), so no
+new lock was needed.

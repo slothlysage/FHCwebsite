@@ -7,6 +7,7 @@ import {
   getDiscountCodeByCode,
   getDiscountCodeById,
   incrementDiscountCodeUsage,
+  setDiscountCodeStripeCouponId,
 } from "@/lib/repos/discount-codes";
 
 // Integration tests against a real Postgres (specs/06-testing.md). Requires
@@ -81,5 +82,25 @@ describe("discount-codes repo", () => {
       .from(discountCodes)
       .where(eq(discountCodes.id, created!.id));
     expect(row?.timesUsed).toBe(3);
+  });
+
+  it("persists a synced Stripe coupon id", async () => {
+    const [created] = await db
+      .insert(discountCodes)
+      .values({ code: "COUPONME", kind: "percent", value: 15 })
+      .returning();
+    insertedIds.push(created!.id);
+
+    const updated = await setDiscountCodeStripeCouponId(
+      created!.id,
+      "coupon_test_123",
+    );
+    expect(updated.stripeCouponId).toBe("coupon_test_123");
+
+    const [row] = await db
+      .select()
+      .from(discountCodes)
+      .where(eq(discountCodes.id, created!.id));
+    expect(row?.stripeCouponId).toBe("coupon_test_123");
   });
 });

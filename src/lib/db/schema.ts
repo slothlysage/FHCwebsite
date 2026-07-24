@@ -231,6 +231,11 @@ export const discountCodes = pgTable(
     startsAt: timestamp("starts_at", { withTimezone: true }),
     endsAt: timestamp("ends_at", { withTimezone: true }),
     isActive: boolean("is_active").notNull().default(true),
+    // Null until this code has been synced to a Stripe Coupon (task 3.8c).
+    // Coupons are immutable once created, so a changed kind/value gets a new
+    // Coupon object rather than an update to this one — mirrors
+    // product_variants.stripe_price_id's "cache, re-verify on read" shape.
+    stripeCouponId: text("stripe_coupon_id"),
   },
   (table) => [
     // Case-insensitive uniqueness: two codes differing only in case are the

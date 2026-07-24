@@ -18,13 +18,19 @@ import { db } from "@/lib/db/client";
 import {
   cartItems,
   carts,
+  discountCodes,
   inventoryMovements,
   orderItems,
   orders,
   productVariants,
   products,
 } from "@/lib/db/schema";
-import { createCart, upsertCartItem } from "@/lib/repos/cart";
+import {
+  createCart,
+  setCartDiscountCode,
+  upsertCartItem,
+} from "@/lib/repos/cart";
+import { getDiscountCodeById } from "@/lib/repos/discount-codes";
 import { getStockForVariant, recordMovement } from "@/lib/repos/inventory";
 import { getOrderByStripeSessionId } from "@/lib/repos/orders";
 import { createProduct } from "@/lib/repos/products";
@@ -52,6 +58,7 @@ describe("fulfillCheckoutSession", () => {
   const insertedVariantIds: string[] = [];
   const insertedCartIds: string[] = [];
   const insertedOrderStripeSessionIds: string[] = [];
+  const insertedDiscountCodeIds: string[] = [];
   let errorSpy: MockInstance;
 
   beforeEach(() => {
@@ -83,6 +90,9 @@ describe("fulfillCheckoutSession", () => {
         .delete(productVariants)
         .where(eq(productVariants.productId, productId));
       await db.delete(products).where(eq(products.id, productId));
+    }
+    for (const id of insertedDiscountCodeIds.splice(0)) {
+      await db.delete(discountCodes).where(eq(discountCodes.id, id));
     }
   });
 
@@ -345,6 +355,50 @@ describe("fulfillCheckoutSession", () => {
     expect(stock).toBe(-1); // 1 on hand - 2 sold
 
     expect(errorSpy).toHaveBeenCalled();
+  });
+
+  it("records the applied discount code on the order and increments its usage exactly once", async () => {
+    const { cart } = await makeCartWithStock(10);
+    const [discountCode] = await db
+      .insert(discountCodes)
+      .values({ code: "TEST-FULFILL-DISCOUNT", kind: "percent", value: 10 })
+      .returning();
+    insertedDiscountCodeIds.push(discountCode!.id);
+    await setCartDiscountCode(cart.id, discountCode!.id);
+
+    const sessionId = `cs_test_${randomUUID()}`;
+    insertedOrderStripeSessionIds.push(sessionId);
+
+    await fulfillCheckoutSession(
+      fakeSession({
+        id: sessionId,
+        metadata: { cart_id: cart.id },
+        total_details: {
+          amount_tax: 0,
+          amount_discount: 240,
+        } as Stripe.Checkout.Session.TotalDetails,
+      }),
+    );
+
+    const order = await getOrderByStripeSessionId(sessionId);
+    expect(order?.discountCodeId).toBe(discountCode!.id);
+    expect(order?.discountCents).toBe(240);
+
+    const updatedDiscountCode = await getDiscountCodeById(discountCode!.id);
+    expect(updatedDiscountCode?.timesUsed).toBe(1);
+  });
+
+  it("does not increment discount usage when the cart has no applied code", async () => {
+    const { cart } = await makeCartWithStock(10);
+    const sessionId = `cs_test_${randomUUID()}`;
+    insertedOrderStripeSessionIds.push(sessionId);
+
+    await fulfillCheckoutSession(
+      fakeSession({ id: sessionId, metadata: { cart_id: cart.id } }),
+    );
+
+    const order = await getOrderByStripeSessionId(sessionId);
+    expect(order?.discountCodeId).toBeNull();
   });
 
   it("rolls back the order, order items, and cart clear when the inventory movement write fails", async () => {

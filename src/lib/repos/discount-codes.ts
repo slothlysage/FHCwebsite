@@ -31,6 +31,21 @@ export async function getDiscountCodeById(
   return row;
 }
 
+// Caches a Stripe Coupon id synced for this code (task 3.8c). Not scoped to
+// an `executor`/transaction — Stripe sync happens outside order-fulfillment's
+// tx, the same way stripe-catalog-sync.ts's variant/Price write-back does.
+export async function setDiscountCodeStripeCouponId(
+  id: string,
+  stripeCouponId: string,
+): Promise<DiscountCode> {
+  const [updated] = await db
+    .update(discountCodes)
+    .set({ stripeCouponId })
+    .where(eq(discountCodes.id, id))
+    .returning();
+  return updated!;
+}
+
 // Atomic `times_used + 1` (not read-then-write) so concurrent redemptions of
 // the same code can't lose an increment.
 export async function incrementDiscountCodeUsage(

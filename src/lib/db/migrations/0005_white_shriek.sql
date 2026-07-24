@@ -1,0 +1,1 @@
+ALTER TABLE "discount_codes" ADD COLUMN "stripe_coupon_id" text;

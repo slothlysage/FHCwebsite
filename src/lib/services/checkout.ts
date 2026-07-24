@@ -5,7 +5,9 @@
 // is no code path here that reads a price, quantity, or total from a client
 // payload, which is what makes the "tampered client payload" AC true by
 // construction rather than by validation.
+import { getDiscountCodeById } from "@/lib/repos/discount-codes";
 import { getCartSummary } from "@/lib/services/cart";
+import { ensureStripeCoupon } from "@/lib/services/stripe-discount-sync";
 import { stripe } from "@/lib/stripe/client";
 import { env } from "@/lib/env";
 
@@ -92,6 +94,24 @@ export async function createCheckoutSession(
 
   const shippingBand = selectShippingBand(totalWeightGrams);
 
+  // A cart's applied discount code (task 3.8b) is synced to a persistent
+  // Stripe Coupon (3.8c, stripe-discount-sync.ts) and passed as a `coupon`
+  // discount — not reconstructed as a second `price_data` line item — so
+  // Stripe's own total math (session.amount_total /
+  // total_details.amount_discount, what order-fulfillment.ts trusts as the
+  // source of truth for money) is what actually reflects the discount.
+  // `getCartSummary` already re-validated this code against the live
+  // subtotal, so a lookup miss here would mean it vanished in the instant
+  // between that read and this one — not a real case to branch on.
+  let discounts: Array<{ coupon: string }> | undefined;
+  if (summary.appliedDiscountCode) {
+    const discountCode = await getDiscountCodeById(
+      summary.appliedDiscountCode.id,
+    );
+    const couponId = await ensureStripeCoupon(discountCode!);
+    discounts = [{ coupon: couponId }];
+  }
+
   const session = await stripe.checkout.sessions.create(
     {
       mode: "payment",
@@ -110,6 +130,7 @@ export async function createCheckoutSession(
         },
       ],
       automatic_tax: { enabled: true },
+      ...(discounts ? { discounts } : {}),
       metadata: { cart_id: cartId },
       success_url: `${env.NEXT_PUBLIC_SITE_URL}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${env.NEXT_PUBLIC_SITE_URL}/checkout/cancelled`,

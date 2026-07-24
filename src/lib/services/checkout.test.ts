@@ -11,13 +11,24 @@ import {
 } from "vitest";
 
 import { db } from "@/lib/db/client";
-import { cartItems, carts, productVariants, products } from "@/lib/db/schema";
-import { createCart, upsertCartItem } from "@/lib/repos/cart";
+import {
+  cartItems,
+  carts,
+  discountCodes,
+  productVariants,
+  products,
+} from "@/lib/db/schema";
+import {
+  createCart,
+  setCartDiscountCode,
+  upsertCartItem,
+} from "@/lib/repos/cart";
 import { createProduct } from "@/lib/repos/products";
 import { createVariant } from "@/lib/repos/variants";
 import type { createCheckoutSession as CreateCheckoutSession } from "@/lib/services/checkout";
 import {
   getStripeFakeCheckoutSessions,
+  getStripeFakeCoupons,
   resetStripeFakeState,
   seedStripePrice,
   stripeServer,
@@ -49,6 +60,7 @@ afterAll(() => stripeServer.close());
 describe("createCheckoutSession", () => {
   const insertedProductIds: string[] = [];
   const insertedCartIds: string[] = [];
+  const insertedDiscountCodeIds: string[] = [];
 
   afterEach(async () => {
     for (const cartId of insertedCartIds.splice(0)) {
@@ -60,6 +72,9 @@ describe("createCheckoutSession", () => {
         .delete(productVariants)
         .where(eq(productVariants.productId, productId));
       await db.delete(products).where(eq(products.id, productId));
+    }
+    for (const id of insertedDiscountCodeIds.splice(0)) {
+      await db.delete(discountCodes).where(eq(discountCodes.id, id));
     }
   });
 
@@ -278,6 +293,51 @@ describe("createCheckoutSession", () => {
       first.ok && second.ok && second.sessionId,
     );
     expect(getStripeFakeCheckoutSessions()).toHaveLength(1);
+  });
+
+  it("passes no discounts param when the cart has no applied code", async () => {
+    const cart = await makeSyncedCart([
+      {
+        priceCents: 1000,
+        stripePriceId: "price_checkout_nodiscount",
+        quantity: 1,
+      },
+    ]);
+
+    await createCheckoutSession(cart.id, {
+      idempotencyKey: "test-no-discount",
+    });
+
+    const [session] = getStripeFakeCheckoutSessions();
+    expect(session?.discountCoupon).toBeNull();
+    expect(getStripeFakeCoupons()).toHaveLength(0);
+  });
+
+  it("syncs the cart's applied discount code to a Stripe Coupon and passes it to the session", async () => {
+    const cart = await makeSyncedCart([
+      {
+        priceCents: 2000,
+        stripePriceId: "price_checkout_discounted",
+        quantity: 1,
+      },
+    ]);
+    const [discountCode] = await db
+      .insert(discountCodes)
+      .values({ code: "TEST20", kind: "percent", value: 20 })
+      .returning();
+    insertedDiscountCodeIds.push(discountCode!.id);
+    await setCartDiscountCode(cart.id, discountCode!.id);
+
+    await createCheckoutSession(cart.id, {
+      idempotencyKey: "test-with-discount",
+    });
+
+    const [session] = getStripeFakeCheckoutSessions();
+    expect(session?.discountCoupon).not.toBeNull();
+    const coupon = getStripeFakeCoupons().find(
+      (c) => c.id === session?.discountCoupon,
+    );
+    expect(coupon?.percent_off).toBe(20);
   });
 
   it("propagates a genuine Stripe error instead of swallowing it", async () => {

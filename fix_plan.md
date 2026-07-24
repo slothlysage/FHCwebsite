@@ -2308,7 +2308,7 @@ https://api.resend.com/emails`, mirroring `stripe-server.ts`'s pattern
       a booking or subscription confirmation is just a different
       `ReceiptEmail`-shaped builder, not a new send path.
 
-- [ ] **3.8 Discount codes**
+- [x] **3.8 Discount codes**
       Deps: 3.3. Percentage and fixed-amount, expiry, usage cap, min-spend.
       AC: expired/exhausted codes are rejected server-side with a clear message;
       a code cannot be applied twice; validation is server-side only.
@@ -2465,24 +2465,69 @@ code} | null`. `discount.ts` gained `DiscountRejectReason` (an
         `order-fulfillment.ts` still needs to call
         `incrementDiscountCodeUsage` — untouched by this task.
 
-  - [ ] **3.8c Checkout + webhook wiring**
-        Deps: 3.8b. `checkout.ts` passes the discount to Stripe (a
-        `coupon`/`discounts` param, not a second `price_data` line item, so
-        Stripe's own total math stays the source of truth for the session
-        amount) — likely needs a Stripe Coupon sync step, since Stripe
-        discounts a session via a Coupon/Promotion Code object, not an
-        arbitrary cents amount; check `specs/05-payments.md` and decide the
-        sync shape before implementing (mirror 3.2's product sync pattern
-        if a persistent Coupon is needed, keyed off `discount_codes.id`
-        the same idempotent way). `order-fulfillment.ts` (3.5) increments
-        `times_used` exactly once per paid order, inside the same
-        fulfillment transaction, keyed off the webhook's existing
-        `webhook_events` idempotency guard — this is what makes "a code
-        cannot be applied twice" hold under concurrent checkouts, not the
-        cart-time check alone (a read-then-check at apply time is
-        inherently racy against a second concurrent checkout; the
-        authoritative enforcement has to live where the order is actually
-        committed).
+  - [x] **3.8c Checkout + webhook wiring**
+        Deps: 3.8b. New `src/lib/services/stripe-discount-sync.ts` —
+        `ensureStripeCoupon(discountCode)`, mirroring
+        `stripe-catalog-sync.ts`'s variant->Price sync pattern but for
+        `discount_codes`->Coupon: reuses the cached `stripeCouponId` when a
+        live Stripe Coupon still matches the code's current `kind`/`value`,
+        creates (and caches) a replacement when it doesn't match, is
+        missing, or was never synced. Coupons have no `active` toggle to
+        archive (unlike Prices), so a stale one is just abandoned — no
+        dashboard-clutter concern the way stray Products/Prices caused in
+        3.2b's incident (fix_plan's now-resolved "Blocked — needs human"
+        entry), since Coupons aren't customer-facing catalog objects.
+        `discount_codes` gained one nullable column, `stripe_coupon_id`
+        (migration `0005_white_shriek.sql`, additive/expand-safe).
+        `discount-codes.ts` repo gained `setDiscountCodeStripeCouponId`.
+        `checkout.ts`: when `getCartSummary`'s `appliedDiscountCode` is set,
+        re-fetches the full row via `getDiscountCodeById`, syncs it to a
+        Coupon, and passes `discounts: [{coupon: couponId}]` to
+        `stripe.checkout.sessions.create` (omitted entirely, not passed as
+        `undefined`, when no code is applied) — Stripe's own
+        `total_details.amount_discount` is what order-fulfillment.ts already
+        trusted as the order's `discountCents` source of truth (3.5), so no
+        change was needed there.
+        `order-fulfillment.ts`: the order insert now sets
+        `discountCodeId: summary.appliedDiscountCode?.id ?? null`, and
+        (inside the same fulfillment transaction, right after `createOrder`)
+        calls `incrementDiscountCodeUsage(id, tx)` when a code was applied.
+        This — not the cart-time read-then-check in `discount.ts` — is what
+        actually makes "a code cannot be applied twice" hold under
+        concurrent checkouts: it runs at most once per Stripe event because
+        the webhook's existing `webhook_events` idempotency guard
+        (`src/lib/stripe/webhook.ts`) already ensures `fulfillCheckoutSession`
+        itself runs at most once per event, so no new lock was needed.
+        `tests/msw/stripe-server.ts` gained `POST/GET /v1/coupons` fake
+        handlers + `seedStripeCoupon`/`getStripeFakeCoupons`, and the
+        checkout-session handler now captures `discounts[0][coupon]` as
+        `discountCoupon` on the returned fake session.
+        Tests: 7 new cases in `stripe-discount-sync.test.ts` (create
+        percent, create fixed, reuse-when-matching, replace-when-changed,
+        treat Stripe-side-missing as create, propagate a genuine Stripe
+        error, re-running for an unchanged code creates no duplicate); 2 new
+        cases in `checkout.test.ts` (no `discounts` param when no code
+        applied, applied code syncs a Coupon and passes its id); 2 new cases
+        in `order-fulfillment.test.ts` (records `discountCodeId` +
+        increments `timesUsed` to 1, no code applied leaves `discountCodeId`
+        null); 1 new repo case in `discount-codes.test.ts`
+        (`setDiscountCodeStripeCouponId`). Every new test confirmed red
+        first (missing function / `TypeError` / assertion against
+        not-yet-wired code) before implementing.
+        AC met: `npm run verify` green — 55 files, 470 tests,
+        97.84/93.58/99.6/97.77% coverage (global 80% floor and
+        `src/lib/services/**` 90% floor both clear — `order-fulfillment.ts`
+        alone sits at 92.3/70.27/100/92.3%, but the two uncovered branches
+        (`!order.email` / receipt-send catch block) predate this task, see
+        3.7's own NOTE), build passes.
+        NOTE: `ensureStripeCoupon` is called from `checkout.ts` on every
+        session-creation request for a cart with an applied code, not from a
+        separate CLI/admin sync step like 3.2b's variants — there's no admin
+        surface to create/edit `discount_codes` rows yet (that's a future
+        4.x task, not assigned a number), so "sync lazily on first use, cache
+        the result" was the only integration point available. Revisit if an
+        admin discount-code UI lands and wants an explicit sync action
+        instead.
 
 ---
 
