@@ -3610,20 +3610,75 @@ page.tsx`. Both ACs verified by integration tests against real Postgres +
         below. The original 4.5b/4.5a "does sharp run under workerd" risk is
         still open and now can't even be checked until 6.0b is fixed.
 
-- [ ] **4.6 Orders dashboard**
-      Deps: 3.5, 4.2. List with status filter and search; detail view with items,
-      totals, addresses, Stripe payment link.
-      AC: totals shown always equal the sum of stored line items — assert this
-      rather than recomputing in the view.
-      Also implements the Dashboard's in-app notifications list decided
-      2026-07-23 (see `specs/04-admin.md`'s "Owner notifications" and the
-      resolved "Blocked — needs human" entry below): surfaces `needs_attention`
-      orders (3.6) with an unread count, each entry linking to the order. The
-      best-effort email half (Resend, to `admin_users.email` once 4.1/4.2
-      auth exists or `ADMIN_EMAIL` until then) can land in this task or be
-      split out — owner's call once the in-app list exists, not blocking.
-      AC addition: a `needs_attention` order appears in the notifications
-      list and its unread state clears on view.
+- [ ] **4.6 Orders dashboard** (split 2026-07-24 into 4.6a/4.6b/4.6c — list,
+      detail, and the Dashboard-screen notifications list are three separable
+      slices, same reasoning 4.7 used to split the Shippo client from its UI.
+      This umbrella item is ticked `[x]` only once all three below are `[x]`.)
+      Deps: 3.5, 4.2.
+
+  - [x] **4.6a Orders list page**
+        Deps: 3.5, 4.2. `/admin/orders`: table with status filter and search
+        (order number or email — mirrors 4.3b's products-list search
+        precedent, `listProducts`'s `search` option matching name OR SKU).
+        AC: filtering by status shows only matching orders; searching by a
+        partial order number or partial email matches. No detail links yet
+        (4.6b isn't built — same "no edit/detail links yet" precedent 4.3b's
+        own notes left for 4.3c).
+        **Done 2026-07-24.** `src/lib/repos/orders.ts` gained `listOrders({
+    status?, search? })` — `search` OR-matches a case-insensitive
+        substring of `email` or `order_number::text` (order number is an
+        integer `serial`, cast to text for the ilike, same "which of the two
+        things a human might search by" shape as `listProducts`' name-or-SKU
+        search), newest-first, no pagination (small single-owner list, same
+        precedent as `listProducts`/`admin-product-filters.ts`).
+        `src/lib/validation/admin-order-filters.ts` mirrors
+        `admin-product-filters.ts` exactly (status enum from
+        `orderStatus.enumValues`, blank/whitespace search treated as "not
+        provided"). `src/app/admin/orders/page.tsx` calls the repo directly
+        (no service wrapper) — a single filtered query with no batch
+        related-data join, same precedent as the product edit page's direct
+        repo composition, not `admin-product-listing.ts`'s two-query shape
+        (that one exists because it also batches variants/SKUs; this list
+        has nothing to batch).
+        Tests: `orders.test.ts` gained a `describe("listOrders")` block (status
+        filter, email search, order-number search, combined filters,
+        newest-first ordering); `admin/orders/page.test.tsx` is a new file,
+        same "invoke the async Server Component directly" pattern as
+        `admin/products/page.test.tsx` (labeled search/status fields, a
+        matching order's number/email/status/total render, non-matching
+        search excludes, status filter excludes/includes, empty state,
+        zero axe violations). Confirmed both files red first (`listOrders is
+    not a function`; page.test.tsx's `./page` import unresolved) before
+        implementing.
+        AC met, verified two ways: the test suite above and `npm run verify`
+        green — 101 files, 780 tests, 98.04/93.62/99.75/98.05% coverage
+        (global 80% floor and `src/lib/services/**`/`src/lib/stripe/**` 90%
+        floor both clear; `listOrders` lives in `repos/**`, not `services/**`,
+        so it isn't held to the higher floor) — and the build's route table
+        showing `ƒ /admin/orders` (dynamic, not statically prerendered, same
+        as every other DB-backed admin route).
+        Split 4.6 originally bundled list + detail + Dashboard notifications
+        as one task; this slice is list only. 4.6b (detail) and 4.6c
+        (Dashboard + notifications) are next.
+
+  - [ ] **4.6b Order detail view**
+        Deps: 4.6a. `/admin/orders/[id]`: items (snapshotted names/prices),
+        totals, addresses, Stripe payment link.
+        AC: totals shown always equal the sum of stored line items — assert
+        this rather than recomputing in the view.
+
+  - [ ] **4.6c Dashboard screen + owner notifications**
+        Deps: 4.6b. `/admin` dashboard: orders needing fulfillment, low-stock
+        variants, last-30-days revenue, and the in-app notifications list
+        decided 2026-07-23 (see `specs/04-admin.md`'s "Owner notifications"
+        and the resolved "Blocked — needs human" entry below): surfaces
+        `needs_attention` orders (3.6) with an unread count, each entry
+        linking to the order (4.6b). The best-effort email half (Resend, to
+        `admin_users.email` once 4.1/4.2 auth exists, or `ADMIN_EMAIL` until
+        then) can land in this task or be split out — owner's call once the
+        in-app list exists, not blocking.
+        AC: a `needs_attention` order appears in the notifications list and
+        its unread state clears on view.
 
 - [ ] **4.7 Fulfillment** (revised 2026-07-23 — see `specs/09-shipping.md`)
       Deps: 4.6. Real USPS label purchase via Shippo, not a typed-in
@@ -3771,7 +3826,7 @@ page.tsx`. Both ACs verified by integration tests against real Postgres +
       adapter** (discovered 2026-07-24, during 4.5c)
       Deps: 6.0, 4.2. `npm run preview` (`opennextjs-cloudflare build` +
       wrangler/workerd) currently fails outright: `ERROR Node.js middleware
-    is not currently supported. Consider switching to Edge Middleware.`
+  is not currently supported. Consider switching to Edge Middleware.`
       `src/proxy.ts` (4.2's route protection + CSRF cookie issuance) is
       forced onto Node.js runtime by Next.js 16.2.11 itself — 4.2's own
       notes already recorded "Proxy always runs on Node.js runtime, no Edge

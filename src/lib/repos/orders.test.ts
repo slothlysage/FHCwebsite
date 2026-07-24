@@ -11,6 +11,7 @@ import {
   getOrderByStripePaymentIntentId,
   getOrderByStripeSessionId,
   getOrderItemsByOrderId,
+  listOrders,
   listOrdersByStatus,
   updateOrder,
 } from "@/lib/repos/orders";
@@ -236,5 +237,90 @@ describe("orders repo", () => {
     });
     expect(fulfilled?.status).toBe("fulfilled");
     expect(fulfilled?.fulfilledAt?.getTime()).toBe(fulfilledAt.getTime());
+  });
+
+  describe("listOrders", () => {
+    it("filters by status", async () => {
+      const pendingSessionId = `cs_test_${randomUUID()}`;
+      const paidSessionId = `cs_test_${randomUUID()}`;
+
+      const pending = await createOrder(baseOrder(pendingSessionId), []);
+      insertedOrderIds.push(pending.id);
+      const paidOrder = await createOrder(baseOrder(paidSessionId), []);
+      insertedOrderIds.push(paidOrder.id);
+      await updateOrder(paidOrder.id, { status: "paid", paidAt: new Date() });
+
+      const paidOrders = await listOrders({ status: "paid" });
+      const paidIds = paidOrders.map((o) => o.id);
+
+      expect(paidIds).toContain(paidOrder.id);
+      expect(paidIds).not.toContain(pending.id);
+    });
+
+    it("searches by a partial email match", async () => {
+      const stripeSessionId = `cs_test_${randomUUID()}`;
+      const marker = randomUUID();
+      const order = await createOrder(
+        {
+          ...baseOrder(stripeSessionId),
+          email: `search-target-${marker}@example.com`,
+        },
+        [],
+      );
+      insertedOrderIds.push(order.id);
+
+      const matches = await listOrders({ search: marker });
+      expect(matches.map((o) => o.id)).toContain(order.id);
+
+      const nonMatches = await listOrders({ search: randomUUID() });
+      expect(nonMatches.map((o) => o.id)).not.toContain(order.id);
+    });
+
+    it("searches by a partial order number match", async () => {
+      const stripeSessionId = `cs_test_${randomUUID()}`;
+      const order = await createOrder(baseOrder(stripeSessionId), []);
+      insertedOrderIds.push(order.id);
+
+      const matches = await listOrders({
+        search: String(order.orderNumber),
+      });
+      expect(matches.map((o) => o.id)).toContain(order.id);
+    });
+
+    it("combines status and search filters", async () => {
+      const stripeSessionId = `cs_test_${randomUUID()}`;
+      const marker = randomUUID();
+      const order = await createOrder(
+        {
+          ...baseOrder(stripeSessionId),
+          email: `combo-${marker}@example.com`,
+        },
+        [],
+      );
+      insertedOrderIds.push(order.id);
+
+      const noMatch = await listOrders({ status: "paid", search: marker });
+      expect(noMatch.map((o) => o.id)).not.toContain(order.id);
+
+      const match = await listOrders({ status: "pending", search: marker });
+      expect(match.map((o) => o.id)).toContain(order.id);
+    });
+
+    it("returns every order newest-first when no filters are given", async () => {
+      const olderSessionId = `cs_test_${randomUUID()}`;
+      const newerSessionId = `cs_test_${randomUUID()}`;
+
+      const older = await createOrder(baseOrder(olderSessionId), []);
+      insertedOrderIds.push(older.id);
+      const newer = await createOrder(baseOrder(newerSessionId), []);
+      insertedOrderIds.push(newer.id);
+
+      const all = await listOrders();
+      const olderIndex = all.findIndex((o) => o.id === older.id);
+      const newerIndex = all.findIndex((o) => o.id === newer.id);
+
+      expect(newerIndex).toBeGreaterThanOrEqual(0);
+      expect(olderIndex).toBeGreaterThan(newerIndex);
+    });
   });
 });

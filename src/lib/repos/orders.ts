@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 
 import { db, type DbExecutor } from "@/lib/db/client";
 import { orderItems, orders } from "@/lib/db/schema";
@@ -72,6 +72,37 @@ export async function listOrdersByStatus(
   status: OrderStatus,
 ): Promise<Order[]> {
   return db.select().from(orders).where(eq(orders.status, status));
+}
+
+// Admin Orders screen's list (fix_plan 4.6a): every order matching the
+// status/search filter, newest-first. `search` matches a case-insensitive
+// substring of either the email or the order number (cast to text — the
+// owner rarely knows which of the two they have on hand, same "OR the two
+// things a human might search by" shape as listProducts' name-or-SKU
+// search).
+export async function listOrders(options?: {
+  status?: OrderStatus;
+  search?: string;
+}): Promise<Order[]> {
+  const conditions = [];
+  if (options?.status) {
+    conditions.push(eq(orders.status, options.status));
+  }
+  if (options?.search) {
+    const pattern = `%${options.search}%`;
+    conditions.push(
+      or(
+        ilike(orders.email, pattern),
+        ilike(sql`${orders.orderNumber}::text`, pattern),
+      ),
+    );
+  }
+
+  return db
+    .select()
+    .from(orders)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(desc(orders.createdAt));
 }
 
 export async function updateOrder(
