@@ -3463,7 +3463,7 @@ inventory.ts` at all — `stock` is never a column per `specs/
         nothing new to design there, just another value the timeline UI
         should render a human-readable line for.
 
-- [ ] **4.5 Image upload** (split 2026-07-24 — mirrors 4.7's a/b umbrella
+- [x] **4.5 Image upload** (split 2026-07-24 — mirrors 4.7's a/b umbrella
       pattern; the combined task was three separable pieces: a pure
       validation/processing service, an R2 network client, and the admin UI
       wiring. This umbrella item is ticked `[x]` only once all three below are.)
@@ -3575,7 +3575,7 @@ image-upload.ts`: `processUploadedImage(buffer)` — caps size before doing
         wherever a `Buffer` (sharp output, Shippo label bytes) meets a
         `fetch` call; same fix applies.
 
-  - [ ] **4.5c Admin UI + upload wiring**
+  - [x] **4.5c Admin UI + upload wiring** (2026-07-24)
         Deps: 4.5a, 4.5b, 4.3 (product edit page). Product edit page gains an
         image manager: file input(s), per-image alt text field (required),
         drag-to-reorder position, delete. Server action: receives the raw
@@ -3587,6 +3587,28 @@ image-upload.ts`: `processUploadedImage(buffer)` — caps size before doing
         AC: uploading a disguised-script `.png` shows a rejection message and
         writes no `product_images` row; a product with an image missing alt
         text cannot be published (already-passing gate, now reachable via UI).
+        **Done 2026-07-24.** `src/lib/actions/admin-images.ts`
+        (`uploadProductImageAction` + `updateProductImagesAction`),
+        `src/components/admin/image-manager.tsx`, `src/lib/validation/
+product-images-form.ts`, wired into `src/app/admin/products/[id]/edit/
+page.tsx`. Both ACs verified by integration tests against real Postgres +
+        msw-mocked R2 + real sharp (see `admin-images.test.ts`). Reorder is a
+        numeric position field + one "Save images" submit, not literal
+        drag-and-drop (no keyboard equivalent, no DnD dependency already
+        present — see `specs/04-admin.md`'s 4.5c notes for the full
+        rationale). `npm run verify` green: 103 files, 789 tests,
+        98.01/93.61/99.74/98.03% coverage.
+        **Important discovery, not resolved by this task**: `npm run preview`
+        (the real `opennextjs-cloudflare` + workerd path) currently fails
+        before reaching sharp at all — `src/proxy.ts` (4.2) is forced onto
+        Node.js runtime by Next.js 16.2.11 itself, and the Cloudflare adapter
+        does not support a Node.js-runtime Proxy/middleware file
+        (`ERROR Node.js middleware is not currently supported`). Confirmed
+        this is pre-existing, not caused by 4.5c, by reverting to `main` and
+        re-running the same `npm run preview`. This means **the site cannot
+        currently reach Cloudflare Workers at all** — see new task 6.0b
+        below. The original 4.5b/4.5a "does sharp run under workerd" risk is
+        still open and now can't even be checked until 6.0b is fixed.
 
 - [ ] **4.6 Orders dashboard**
       Deps: 3.5, 4.2. List with status filter and search; detail view with items,
@@ -3651,6 +3673,17 @@ image-upload.ts`: `processUploadedImage(buffer)` — caps size before doing
 - [ ] **4.9 Audit log view**
       Deps: 4.7. Who did what, when, to which record.
       AC: every admin mutation appears; the log is append-only with no UI to edit it.
+
+- [ ] **4.10 R2 orphaned-object cleanup** (discovered 2026-07-24, during
+      4.5c)
+      Deps: 4.5b, 4.5c. `updateProductImagesAction` deletes a
+      `product_images` row on request but never calls anything to remove
+      its three R2 objects (`r2.ts` has no `deleteObject` yet — 4.5b only
+      added the `putObject`/`getObject` pair 4.5c's re-upload step needed).
+      Not a correctness bug (nothing reads a row that no longer exists) but
+      real storage waste that grows with every replaced/removed product
+      photo. AC: deleting an image via the admin UI also removes its R2
+      objects (thumbnail/medium/large), not just the DB row.
 
 ---
 
@@ -3734,8 +3767,32 @@ image-upload.ts`: `processUploadedImage(buffer)` — caps size before doing
       (`DATABASE_URL=<neon> npm run db:migrate`) until a deploy-step
       migration job exists (08-deploy-ops pipeline).
 
+- [ ] **6.0b Fix Proxy Node.js-runtime incompatibility with the Cloudflare
+      adapter** (discovered 2026-07-24, during 4.5c)
+      Deps: 6.0, 4.2. `npm run preview` (`opennextjs-cloudflare build` +
+      wrangler/workerd) currently fails outright: `ERROR Node.js middleware
+    is not currently supported. Consider switching to Edge Middleware.`
+      `src/proxy.ts` (4.2's route protection + CSRF cookie issuance) is
+      forced onto Node.js runtime by Next.js 16.2.11 itself — 4.2's own
+      notes already recorded "Proxy always runs on Node.js runtime, no Edge
+      Runtime opt-in exists anymore" as a framework fact, but nobody had
+      re-run a real Cloudflare preview since (6.0 predates 4.2 and only ever
+      verified `opennextjs-cloudflare build`, not `preview`/`wrangler dev`;
+      `npm run verify`'s gate doesn't include `preview`). Blocks 6.1 outright
+      — the site cannot currently reach Cloudflare Workers at all, not just
+      an unverified edge case. Likely needs either: an `@opennextjs/
+cloudflare` config/version that supports Node-runtime middleware (check for
+      one before rewriting anything), or moving `verifySession`'s
+      `node:crypto` usage + DB read out of `proxy.ts` into something
+      Workers-compatible. See `specs/04-admin.md`'s 4.5c implementation
+      notes for the full discovery writeup. This also blocks re-checking
+      whether `sharp` (4.5a) actually works under real workerd, the open
+      risk 4.5b/4.5c already carry.
+      AC: `npm run preview` succeeds and serves `/admin/login` (a Proxy-
+      guarded route) without the Node.js-middleware error.
+
 - [ ] **6.1 Staging deploy**
-      Deps: 5.5. Cloudflare Workers + Neon, still Stripe test mode.
+      Deps: 5.5, 6.0b. Cloudflare Workers + Neon, still Stripe test mode.
       AC: full E2E passes against the deployed staging URL.
 
 - [ ] **6.2 Domain, DNS, TLS**

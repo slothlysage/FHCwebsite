@@ -440,6 +440,66 @@ products.ts`'s `listProducts` gained a `search` option: a case-insensitive
   is part of the hostname, so a literal URL match doesn't work the way
   `tests/msw/stripe-server.ts`'s literal `api.stripe.com` match does).
 
+## Implementation notes (4.5c — admin UI + upload wiring)
+
+- `src/lib/actions/admin-images.ts` has two Server Actions, not one per
+  CRUD verb: `uploadProductImageAction` (new file → 4.5a processing → 4.5b
+  R2 upload → repo write) and `updateProductImagesAction` (batch alt
+  text/position/delete over the existing set). Both end by calling
+  `replaceProductImages` — the images repo's only write path is "replace
+  the whole set" (see its own comment), so add/edit/delete/reorder all
+  reduce to "fetch the current rows, compute the new array, replace" rather
+  than adding per-row repo functions.
+- **No drag-and-drop.** The task description says "drag-to-reorder
+  position"; this implements reordering as a plain numeric `position` input
+  per row plus one "Save images" submit instead. Literal HTML5 drag-and-drop
+  has no keyboard equivalent and no library was already a dependency —
+  AGENT.md requires every interactive component to ship keyboard support,
+  and a numeric field is that for free. Revisit only if the owner
+  specifically asks for drag interaction.
+- **The edit form is field-named per image id** (`altText__<id>`,
+  `position__<id>`, `delete__<id>`, see `product-images-form.ts`'s field
+  name helpers), not by array index. `updateProductImagesAction` iterates
+  its own `listImagesByProductId` result and reads each row's fields by the
+  id it already trusts, rather than trusting a client-submitted id list —
+  a forged extra row in the POST body can't inject an image that was never
+  actually in the DB.
+- **Only the "large" (1600px) responsive size is written to
+  `product_images.url`.** The schema has one url/width/height per row, but
+  4.5a's `processUploadedImage` produces three sizes. All three still get
+  uploaded to R2 (`products/<productId>/<imageId>/<label>.webp`) so 5.4's
+  future `srcset`/`<picture>` work can address them by the same naming
+  convention without a re-upload; today's storefront components
+  (`product-gallery.tsx`, `product-card.tsx`) only ever render a single
+  `url` per image, so wiring a real `srcset` is deliberately out of this
+  task's scope.
+- **Deleting an image only removes its DB row, not its R2 objects.** There
+  is no `deleteObject` in `r2.ts` yet (4.5b only added `putObject`/
+  `getObject`, the pair 4.5c's re-upload step needed). A deleted image's
+  three sizes become orphaned storage, not a correctness bug (nothing reads
+  a row that no longer exists) but real waste over time. Logged in
+  `fix_plan.md`'s Phase 5 as follow-up, not fixed here.
+- **The 4.5b sharp/workerd risk is still open — worse, it's currently
+  unverifiable in this sandbox for an unrelated reason.** Running
+  `npm run preview` (the actual `opennextjs-cloudflare build` +
+  `wrangler`/workerd path 6.0's own notes never got to exercise, since
+  wrangler needed Node ≥22) now fails before it even reaches sharp:
+  `ERROR Node.js middleware is not currently supported. Consider switching
+to Edge Middleware.` This is `src/proxy.ts` (4.2's route protection),
+  which 4.2's own notes already recorded as forced onto Node.js runtime by
+  Next.js 16.2.11 itself ("Proxy always runs on Node.js runtime", no Edge
+  Runtime opt-in exists anymore) — confirmed by reverting to `main` (pre-
+  4.5c) and re-running the same `npm run preview`: identical failure, so
+  this is not something 4.5c introduced. 6.0 was pulled ahead of 4.2 and
+  only ever verified `opennextjs-cloudflare build` (which succeeds); nobody
+  re-ran a real preview/deploy after `proxy.ts` started existing, and
+  `npm run verify` doesn't include `preview` in its gate, so this regression
+  shipped silently. **This means the site cannot currently reach Cloudflare
+  Workers at all**, independent of whether sharp itself would work there —
+  a strictly more urgent blocker than the original sharp question, and one
+  that blocks 6.1 Staging deploy outright. New fix_plan task filed (see
+  Phase 6).
+
 ## Rules
 
 - Every mutation writes an `audit_log` row with before/after JSON.

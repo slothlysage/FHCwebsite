@@ -9,13 +9,19 @@ import {
 } from "@/lib/actions/admin-products";
 import { adjustStockAction } from "@/lib/actions/admin-inventory";
 import {
+  uploadProductImageAction,
+  updateProductImagesAction,
+} from "@/lib/actions/admin-images";
+import {
   createVariantAction,
   updateVariantAction,
 } from "@/lib/actions/admin-variants";
 import { readCsrfCookie } from "@/lib/auth/csrf-cookie";
+import { listImagesByProductId } from "@/lib/repos/images";
 import { getStockForVariants } from "@/lib/repos/inventory";
 import { getProductById } from "@/lib/repos/products";
 import { listVariantsByProductId } from "@/lib/repos/variants";
+import { ImageManager } from "@/components/admin/image-manager";
 import { ProductForm } from "@/components/admin/product-form";
 import { ProductStatusActions } from "@/components/admin/product-status-actions";
 import { VariantList } from "@/components/admin/variant-list";
@@ -39,6 +45,7 @@ export default async function EditProductPage({
   const stockByVariantId = await getStockForVariants(
     variants.map((variant) => variant.id),
   );
+  const images = await listImagesByProductId(product.id);
   const csrfToken = (await readCsrfCookie()) ?? "";
   const initialState: ProductFormState = {
     errors: {},
@@ -80,6 +87,12 @@ export default async function EditProductPage({
         adjustStockAction={(variantId) =>
           adjustStockAction.bind(null, variantId)
         }
+      />
+      <ImageManager
+        images={images}
+        csrfToken={csrfToken}
+        updateAction={updateProductImagesAction.bind(null, product.id)}
+        uploadAction={uploadProductImageAction.bind(null, product.id)}
       />
     </div>
   );
